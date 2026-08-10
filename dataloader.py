@@ -492,7 +492,9 @@ def get_dataset(dataset_name,
                 cache_dir,
                 insert_eos=True,
                 block_size=1024,
-                num_proc=len(os.sched_getaffinity(0)),
+                num_proc=(len(os.sched_getaffinity(0))
+                          if hasattr(os, 'sched_getaffinity')
+                          else os.cpu_count()),
                 streaming=False,
                 revision : Optional[str]=None):
   if dataset_name == 'cifar10':

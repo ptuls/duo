@@ -2,8 +2,11 @@ import math
 import typing
 
 import einops
-import flash_attn
-import flash_attn.layers.rotary
+try:
+  import flash_attn
+  import flash_attn.layers.rotary
+except ImportError:  # CPU / macOS fallback: pure-torch rotary + SDPA
+  flash_attn = None
 import huggingface_hub
 import omegaconf
 import torch
@@ -109,6 +112,18 @@ def rotate_half(x):
   return torch.cat((-x2, x1), dim=-1)
 
 
+def _apply_rotary_emb_torch(x, cos, sin):
+  """Pure-torch rotary embedding, matching
+  flash_attn.layers.rotary.apply_rotary_emb_torch (interleaved=False).
+  x: (b, s, h, d); cos, sin: (s, r) with rotary dimension 2r."""
+  ro_dim = cos.shape[-1] * 2
+  cos = torch.cat([cos, cos], dim=-1)[None, :, None, :]
+  sin = torch.cat([sin, sin], dim=-1)[None, :, None, :]
+  x_rot, x_pass = x[..., :ro_dim], x[..., ro_dim:]
+  out = x_rot * cos + rotate_half(x_rot) * sin
+  return torch.cat([out, x_pass], dim=-1)
+
+
 def split_and_apply_rotary_pos_emb(qkv, rotary_cos_sin):
   with torch.amp.autocast('cuda', enabled=False):
     cos, sin = rotary_cos_sin
@@ -117,15 +132,21 @@ def split_and_apply_rotary_pos_emb(qkv, rotary_cos_sin):
     cos = cos[0,:,0,0,:cos.shape[-1]//2]
     sin = sin[0,:,0,0,:sin.shape[-1]//2]
     q, k, v = qkv.chunk(3, dim=2)
-    q = flash_attn.layers.rotary.apply_rotary_emb_torch(
-      q.squeeze(dim=2), cos, sin)
-    k = flash_attn.layers.rotary.apply_rotary_emb_torch(
-      k.squeeze(dim=2), cos, sin)
+    if flash_attn is not None:
+      rotary_fn = flash_attn.layers.rotary.apply_rotary_emb_torch
+    else:
+      rotary_fn = _apply_rotary_emb_torch
+    q = rotary_fn(q.squeeze(dim=2), cos, sin)
+    k = rotary_fn(k.squeeze(dim=2), cos, sin)
     v = v.squeeze(dim=2)
   return q, k, v
 
 
 def apply_rotary_pos_emb(qkv, cos, sin):
+  if flash_attn is None:
+    raise RuntimeError(
+      'The causal-attention path requires flash_attn; '
+      'install it or use causal_attention=False.')
   cos = cos[0,:,0,0,:cos.shape[-1]//2]
   sin = sin[0,:,0,0,:sin.shape[-1]//2]
   return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)

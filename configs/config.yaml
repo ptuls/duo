@@ -25,6 +25,8 @@ loader:
 sampling:
   predictor: ancestral  # ancestral_cache (only for MDLM), ancestral, analytic, psi (for psi-samplers)
   steps: 1000
+  grid: uniform_t  # uniform_t / uniform_beta / uniform_logodds / uniform_hazard (Gumbel-lift dual-geometry grids)
+  grid_beta_clip: 1.0e-3  # endpoint clip for logodds/hazard grids
   noise_removal: ancestral  # 'ancestral', 'greedy', 'none'
   use_float64: True
   p_nucleus: 1.0

@@ -1,0 +1,21 @@
+name: gmcd
+backbone: dit  # dit / dimamba / hf_dit
+parameterization: subs
+time_conditioning: False
+subs_masking: False
+causal_attention: False
+ignore_bos: False
+
+# Distillation
+loss_type: kl-fwd  # kl-fwd / kl-bwd
+update_teacher_every: 10_000
+teacher_ema: False
+T: 64  # base of the dt doubling schedule (dt = 2^n / T)
+linear_growth_dt: False
+linear_growth_min: 0.001
+linear_growth_max: 0.25
+
+# Teacher sharpening (1.0 disables; Latent Shadows uses 0.96 / 0.75 / 0.03)
+teacher_temp_start: 1.0
+teacher_temp_min: 1.0
+teacher_temp_decay: 0.0

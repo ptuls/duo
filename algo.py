@@ -756,3 +756,143 @@ class Distillation(DUO):
              on_epoch=False,
              sync_dist=True)
     return super().training_step(batch, batch_idx)
+
+
+class GMCD(MDLM):
+  """Gumbel-lift consistency distillation (G-MCD) for masked diffusion.
+
+  Implements Algorithm 1 of the Gumbel-lift paper on top of a pretrained
+  MDLM-style teacher. The exact threshold coupling (Theorem 5.1: one uniform
+  per token thresholded against both noise levels) replaces Duo's
+  shared-Gaussian-epsilon trajectory and Latent Shadows' numerically
+  calibrated Gaussian latent. No integral cache, no curriculum, and no
+  continuous latent are required, since the coupling is exact for every mask
+  schedule. The SUBS carry-over makes the teacher's prediction at a token
+  revealed in (s, t] exactly the ground-truth one-hot, so the
+  committed-token cross-entropy of Algorithm 1 emerges automatically from
+  the KL below.
+  """
+
+  def __init__(self, config, tokenizer):
+    super().__init__(config, tokenizer)
+    self.update_teacher_every = config.algo.update_teacher_every
+    self.teacher = None
+    self.teacher_ema = config.algo.teacher_ema
+    self.linear_growth_dt = config.algo.linear_growth_dt
+    self.linear_growth_min = config.algo.linear_growth_min
+    self.linear_growth_max = config.algo.linear_growth_max
+    # Teacher temperature sharpening. Latent Shadows hardcodes
+    # 0.96 with -0.03 per 10k-step stage (floor 0.75); we expose it
+    # so the paper can ablate sharpening against tau_tea = 1.
+    self.teacher_temp_start = config.algo.teacher_temp_start
+    self.teacher_temp_min = config.algo.teacher_temp_min
+    self.teacher_temp_decay = config.algo.teacher_temp_decay
+    self.save_hyperparameters()
+
+  def _teacher_temperature(self):
+    stage = self.global_step // self.update_teacher_every
+    if stage < 1:
+      return self.teacher_temp_start
+    return max(self.teacher_temp_min,
+               self.teacher_temp_start
+               - (stage - 1) * self.teacher_temp_decay)
+
+  def _validate_configuration(self):
+    super()._validate_configuration()
+    assert self.loss_type in {'kl-fwd', 'kl-bwd'}
+    assert self.T > 0, (
+      'algo.T sets the base of the dt doubling schedule; '
+      'use e.g. algo.T=64.')
+
+  def _maybe_update_teacher_weights(self):
+    if self.global_step % self.update_teacher_every != 0:
+      return
+    if self.teacher_ema:
+      self.ema.copy_to(self.teacher.parameters())
+    else:
+      for better_param, current_param in zip(
+        self.backbone.parameters(), self.teacher.parameters()):
+        if current_param.requires_grad:
+          current_param.data.copy_(better_param.data)
+
+  @torch.no_grad()
+  def _teacher_logits(self, xs, sigma):
+    if self.teacher is None:
+      self.teacher = copy.deepcopy(self.backbone)
+    self._maybe_update_teacher_weights()
+
+    sigma = self._process_sigma(sigma)
+    with torch.amp.autocast('cuda', dtype=torch.float32):
+      model_output = self.teacher(xs, sigma)
+    model_output = model_output / self._teacher_temperature()
+    logits = self._process_model_output(
+      model_output=model_output, xt=xs, sigma=sigma)
+    return logits.detach()
+
+  def _sample_coupled(self, x0, alpha_t, alpha_s):
+    """Exactly coupled (x_t, x_s) via the threshold coupling.
+
+    One uniform per token. A token is masked at level t iff u < 1 - alpha_t.
+    Since alpha_s >= alpha_t, the masked set at s is nested in the masked set
+    at t, which is the absorbing property along the shared trajectory
+    (Theorem 5.1). This is the entire trajectory construction: no latent
+    simulation, no calibration.
+    """
+    u = torch.rand(*x0.shape, device=x0.device)
+    xt = torch.where(u < 1 - alpha_t, self.mask_index, x0)
+    xs = torch.where(u < 1 - alpha_s, self.mask_index, x0)
+    if self.ignore_bos:
+      xt[:, 0] = x0[:, 0]
+      xs[:, 0] = x0[:, 0]
+    return xt, xs
+
+  def _compute_dt(self):
+    if self.linear_growth_dt:
+      scale = self.global_step / self.trainer.max_steps
+      return self.linear_growth_min + scale * (
+        self.linear_growth_max - self.linear_growth_min)
+    n = self.global_step // self.update_teacher_every
+    return 2 ** n / self.T
+
+  def nll(self, x0, labels, output_tokens,
+          current_accumulation_step=None, train_mode=False):
+    del output_tokens, train_mode
+    assert labels is None, (
+      'class-conditional G-MCD is not implemented')
+    t = self._sample_t(x0.shape[0], current_accumulation_step)
+    dt = self._compute_dt()
+    t = torch.clip(t + dt, 0, 1)
+    s = torch.clip(t - dt, 0, 1)
+
+    alpha_t = self.noise(t)[1].unsqueeze(-1)
+    alpha_s = self.noise(s)[1].unsqueeze(-1)
+    assert alpha_t.ndim == 2
+
+    xt, xs = self._sample_coupled(x0, alpha_t, alpha_s)
+    log_x_theta_student = self.forward(
+      xt, sigma=self._sigma_from_alphat(alpha_t))
+    log_x_theta_teacher = self._teacher_logits(
+      xs, sigma=self._sigma_from_alphat(alpha_s))
+    if self.config.training.loss_precision == 'float64':
+      log_x_theta_student = log_x_theta_student.to(torch.float64)
+      log_x_theta_teacher = log_x_theta_teacher.to(torch.float64)
+
+    if self.loss_type == 'kl-fwd':
+      kl = (log_x_theta_teacher.exp() * (
+        log_x_theta_teacher - log_x_theta_student)).sum(-1)
+    else:  # kl-bwd
+      kl = (log_x_theta_student.exp() * (
+        log_x_theta_student - log_x_theta_teacher)).sum(-1)
+    # Unmasked positions carry over deterministically under SUBS
+    # (student and teacher agree exactly), so the loss lives on the
+    # tokens masked at level t.
+    return torch.where(xt == self.mask_index, kl,
+                       torch.zeros_like(kl))
+
+  def training_step(self, batch, batch_idx):
+    self.log(name='dt',
+             value=self._compute_dt(),
+             on_step=True,
+             on_epoch=False,
+             sync_dist=True)
+    return super().training_step(batch, batch_idx)

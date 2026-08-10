@@ -671,9 +671,50 @@ class Diffusion(TrainerBase):
     q_sample = kappa * q_xs + (1 - kappa) * pc_q_xs
     return p_x0, sample_categorical(q_sample)
 
+  def _grid_time_profile(self, eps, num_knots):
+    """Time knots realizing an intrinsic-geometry mask-fraction grid.
+
+    Diffusion time is a gauge (the training ELBO is schedule-invariant), so a
+    finite-step sampler is a quadrature rule on the mask fraction beta. The
+    dual geometry (Gumbel-lift paper, Sec. 5) supplies intrinsic clocks:
+      uniform_t        conventional (identity here)
+      uniform_beta     equal expected tokens committed per step
+      uniform_logodds  equal latent log-odds movement (= geometric annealing)
+      uniform_hazard   equal cumulative-hazard increments
+    We build the beta-grid, map to alpha = 1 - beta, then invert the noise
+    schedule via get_t_for_alpha. Under LogLinear (beta_t = t) uniform_beta
+    coincides with uniform_t; log-odds and hazard genuinely differ.
+    """
+    grid = self.config.sampling.grid
+    clip = float(self.config.sampling.grid_beta_clip)
+    hi, lo = 1.0 - clip, clip
+    if grid == 'uniform_beta':
+      betas = torch.linspace(1.0, 0.0, num_knots)
+    elif grid == 'uniform_logodds':
+      import math
+      lo_lg, hi_lg = math.log(hi / (1 - hi)), math.log(lo / (1 - lo))
+      logits = torch.linspace(lo_lg, hi_lg, num_knots)
+      betas = torch.sigmoid(logits)
+      betas[0], betas[-1] = 1.0, 0.0
+    elif grid == 'uniform_hazard':
+      import math
+      H = torch.linspace(-math.log(1 - hi), -math.log(1 - lo), num_knots)
+      betas = 1.0 - torch.exp(-H)
+      betas[0], betas[-1] = 1.0, 0.0
+    else:
+      raise ValueError(f'unknown sampling.grid {grid!r}')
+    alphas = (1.0 - betas).clamp(0.0, 1.0)
+    t = self.noise.get_t_for_alpha(alphas)
+    if not torch.is_tensor(t):
+      t = torch.tensor(t, dtype=torch.float32)
+    return t.to(torch.float32).clamp(eps, 1.0)
+
   def _get_sampling_time_profile(self, eps, num_steps):
     profile = self.config.sampling.psi.time_profile
     num_steps += 1
+    grid = getattr(self.config.sampling, 'grid', 'uniform_t')
+    if grid != 'uniform_t' and self.config.sampling.predictor != 'psi':
+      return self._grid_time_profile(eps, num_steps)
     if profile == 'linear' \
       or self.config.sampling.predictor != 'psi':
       # Default: linearly decrease

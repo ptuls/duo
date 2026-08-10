@@ -316,6 +316,8 @@ def main(config):
     diffusion_model = algo.DUO
   elif config.algo.name == 'distillation':
     diffusion_model = algo.Distillation
+  elif config.algo.name == 'gmcd':
+    diffusion_model = algo.GMCD
   elif config.algo.name == 'ot-finetune':
     diffusion_model = algo.OptimalTransportFinetune
   else:
