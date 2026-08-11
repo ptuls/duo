@@ -376,7 +376,36 @@ class TrainerBase(L.LightningModule):
                    on_epoch=True,
                    on_step=False,
                    sync_dist=True)
+      self._log_few_step_gen_ppl()
     self._train_mode()
+
+  def _log_few_step_gen_ppl(self):
+    """Log generative perplexity at few-step budgets (val/gen_ppl@{k}step).
+
+    The default sampling.steps run is near-converged, so it does not reveal the
+    few-step quality that distillation targets. This samples a small number of
+    batches at each configured budget and logs each separately, reusing the
+    single gen_ppl accumulator with a reset between budgets.
+    """
+    budgets = self.config.eval.get('gen_ppl_step_budgets', []) or []
+    if (not budgets
+        or self.trainer.sanity_checking
+        or not self.config.eval.compute_generative_perplexity):
+      return
+    n_batches = self.config.eval.get('gen_ppl_sweep_sample_batches', 2)
+    for k in budgets:
+      self.metrics.gen_ppl.reset()
+      for _ in range(n_batches):
+        samples = self.generate_samples(
+          num_samples=self.config.loader.eval_batch_size,
+          num_steps=int(k))
+        text_samples = self.tokenizer.batch_decode(samples)
+        self.metrics.record_generative_perplexity(
+          text_samples, self.num_tokens, self.device)
+      self.log(f'val/gen_ppl@{int(k)}step',
+               self.metrics.gen_ppl.compute(),
+               on_epoch=True, on_step=False, sync_dist=True)
+    self.metrics.gen_ppl.reset()
 
   def configure_optimizers(self):
     optimizer = torch.optim.AdamW(

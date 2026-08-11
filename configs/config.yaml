@@ -72,6 +72,11 @@ eval:
   gen_ppl_eval_model_name_or_path: gpt2-large  # gpt2-large, meta-llama/Llama-2-7b-hf
   generate_samples: True
   generated_samples_path: ${cwd:}/samples.json
+  # Extra generative-perplexity logging at few-step budgets, in addition to the
+  # default sampling.steps run. This is the regime distillation actually
+  # improves; logs val/gen_ppl@{k}step for each k. Empty list = off.
+  gen_ppl_step_budgets: []          # e.g. [1, 2, 4, 8]
+  gen_ppl_sweep_sample_batches: 2   # sample batches per budget (kept small)
 
 optim:
   weight_decay: 0
