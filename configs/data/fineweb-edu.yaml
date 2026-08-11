@@ -2,7 +2,7 @@ train: HuggingFaceFW/fineweb-edu
 valid: openwebtext-valid  #wikitext103
 modality: text
 tokenizer_name_or_path: gpt2
-cache_dir: /share/kuleshov/ssahoo/textdiffusion/data
+cache_dir: ${oc.env:DUO_DATA_DIR,${oc.env:HOME}/.cache/duo_data}
 wrap: True
 streaming: True
 insert_train_eos: True

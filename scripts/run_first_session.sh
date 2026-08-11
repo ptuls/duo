@@ -31,15 +31,20 @@ GRID_STEPS="${GRID_STEPS:-2 4 8}"
 EVAL_BATCH="${EVAL_BATCH:-16}"
 SAMPLE_BATCHES="${SAMPLE_BATCHES:-4}"
 OUT="${OUT:-watch_folder/first_session}"
+# Dataset cache location. The fork's configs originally hardcoded a cluster
+# path (/share/...); point this at process-writable storage. Prefer scratch
+# with room for the tokenized OWT (tens of GB); defaults next to the repo.
+DATA_DIR="${DATA_DIR:-$PWD/data}"
 
 export HYDRA_FULL_ERROR=1
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$DATA_DIR"
 
 # MDLM (and GMCD) require ancestral_cache; the assertion fires at model
 # construction, so ppl_eval needs it too. Not a global default: time-conditioned
 # algos (DUO/SEDD/Distillation) forbid ancestral_cache (trainer_base.py:154).
 common=(data="$DATA" model="$MODEL" algo=mdlm
         eval.checkpoint_path="$TEACHER"
+        data.cache_dir="$DATA_DIR"
         loader.eval_batch_size="$EVAL_BATCH"
         sampling.predictor=ancestral_cache
         +wandb.offline=true)
