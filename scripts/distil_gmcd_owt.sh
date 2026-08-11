@@ -104,7 +104,6 @@ python -u -m main \
   sampling.steps=32 \
   sampling.predictor=ancestral_cache \
   eval.compute_generative_perplexity=True \
-  'eval.gen_ppl_step_budgets=[1,2,4,8]' \
   algo.T=512 \
   lr_scheduler.num_warmup_steps=500 \
   trainer.val_check_interval=1000 \
