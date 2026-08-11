@@ -35,9 +35,13 @@ OUT="${OUT:-watch_folder/first_session}"
 export HYDRA_FULL_ERROR=1
 mkdir -p "$OUT"
 
+# MDLM (and GMCD) require ancestral_cache; the assertion fires at model
+# construction, so ppl_eval needs it too. Not a global default: time-conditioned
+# algos (DUO/SEDD/Distillation) forbid ancestral_cache (trainer_base.py:154).
 common=(data="$DATA" model="$MODEL" algo=mdlm
         eval.checkpoint_path="$TEACHER"
         loader.eval_batch_size="$EVAL_BATCH"
+        sampling.predictor=ancestral_cache
         +wandb.offline=true)
 
 echo "=============================================================="
