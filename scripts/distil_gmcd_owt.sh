@@ -45,4 +45,5 @@ python -u -m main \
   trainer.limit_val_batches=8 \
   algo.teacher_ema=False \
   algo.linear_growth_dt=false \
-  +wandb.offline=true
+  +wandb.offline=true \
+  "$@"   # extra hydra overrides win (e.g. trainer.max_steps=50)
