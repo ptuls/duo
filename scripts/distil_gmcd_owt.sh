@@ -15,8 +15,78 @@
 # curriculum flags are needed: the threshold coupling is exact for any
 # mask schedule (Theorem 5.1 of the Gumbel-lift paper).
 
+set -euo pipefail
 export HYDRA_FULL_ERROR=1
 finetune_path=${FINETUNE_PATH:-/path/to/mdlm.ckpt}
+
+# ------------------------------------------------------------------ preflight
+# Fail fast with a clear message rather than a Python traceback minutes in.
+# Skip with SKIP_PREFLIGHT=1.
+preflight() {
+  local ok=1
+  echo "[preflight] checking launch prerequisites..."
+
+  # 1. Teacher checkpoint exists and is non-trivial (not the placeholder).
+  if [[ "$finetune_path" == /path/to/* ]]; then
+    echo "  [FAIL] FINETUNE_PATH is the placeholder ($finetune_path)."
+    echo "         Set FINETUNE_PATH=/abs/path/to/mdlm.ckpt"; ok=0
+  elif [[ ! -f "$finetune_path" ]]; then
+    echo "  [FAIL] checkpoint not found: $finetune_path"; ok=0
+  else
+    local sz; sz=$(stat -c%s "$finetune_path" 2>/dev/null || stat -f%z "$finetune_path")
+    if [[ "${sz:-0}" -lt 10000000 ]]; then
+      echo "  [FAIL] checkpoint suspiciously small (${sz} bytes): $finetune_path"
+      echo "         A partial gdown download? Re-fetch mdlm.ckpt."; ok=0
+    else
+      echo "  [ok]   checkpoint present ($((sz/1024/1024)) MB)"
+    fi
+  fi
+
+  # 2. Data cache dir is writable (the old /share path was not).
+  local dd="${DUO_DATA_DIR:-$PWD/data}"
+  if ! mkdir -p "$dd" 2>/dev/null || [[ ! -w "$dd" ]]; then
+    echo "  [FAIL] data cache dir not writable: $dd"
+    echo "         Set DUO_DATA_DIR to writable storage."; ok=0
+  else
+    echo "  [ok]   data cache dir writable ($dd)"
+  fi
+
+  # 3. GPU visible.
+  if ! python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+    echo "  [FAIL] torch.cuda.is_available() is False (no GPU / bad CUDA build)."; ok=0
+  else
+    local ng; ng=$(python -c "import torch; print(torch.cuda.device_count())")
+    echo "  [ok]   CUDA available, ${ng} GPU(s) visible"
+  fi
+
+  # 4. wandb reachable unless offline (online run needs a login/API key).
+  if [[ "${WANDB_OFFLINE:-false}" != "true" ]]; then
+    if ! python -c "import netrc,os,sys; sys.exit(0 if (os.getenv('WANDB_API_KEY') or ('api.wandb.ai' in (netrc.netrc().hosts if os.path.exists(os.path.expanduser('~/.netrc')) else {}))) else 1)" 2>/dev/null; then
+      echo "  [FAIL] online W&B requested but not logged in."
+      echo "         Run 'wandb login', or set WANDB_API_KEY, or WANDB_OFFLINE=true."; ok=0
+    else
+      echo "  [ok]   W&B credentials found (online logging)"
+    fi
+  else
+    echo "  [ok]   W&B offline (local logging)"
+  fi
+
+  # 5. Warn (not fail) if the local branch is behind its remote.
+  if git -C "$(dirname "$0")/.." rev-parse @ >/dev/null 2>&1; then
+    git -C "$(dirname "$0")/.." fetch --quiet origin 2>/dev/null || true
+    local behind; behind=$(git -C "$(dirname "$0")/.." rev-list --count @..@{u} 2>/dev/null || echo 0)
+    if [[ "${behind:-0}" -gt 0 ]]; then
+      echo "  [warn] local branch is $behind commit(s) behind origin. 'git pull' to get latest fixes."
+    fi
+  fi
+
+  if [[ "$ok" -ne 1 ]]; then
+    echo "[preflight] FAILED. Fix the above or re-run with SKIP_PREFLIGHT=1 to bypass." >&2
+    exit 1
+  fi
+  echo "[preflight] all checks passed."
+}
+[[ "${SKIP_PREFLIGHT:-0}" == "1" ]] || preflight
 
 # No srun/torchrun needed: trainer.devices=${device_count:} auto-detects all
 # GPUs and the default ddp strategy spawns its own workers from one process.
