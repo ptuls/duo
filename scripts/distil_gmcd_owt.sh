@@ -18,10 +18,14 @@
 export HYDRA_FULL_ERROR=1
 finetune_path=${FINETUNE_PATH:-/path/to/mdlm.ckpt}
 
-srun python -u -m main \
+# No srun/torchrun needed: trainer.devices=${device_count:} auto-detects all
+# GPUs and the default ddp strategy spawns its own workers from one process.
+# Set CUDA_VISIBLE_DEVICES to restrict which GPUs are used.
+python -u -m main \
   mode=train \
-  loader.batch_size=2 \
-  loader.eval_batch_size=2 \
+  data.cache_dir=${DUO_DATA_DIR:-$PWD/data} \
+  loader.batch_size=${BATCH_SIZE:-16} \
+  loader.eval_batch_size=${EVAL_BATCH_SIZE:-32} \
   data=openwebtext-split \
   model=small \
   algo=gmcd \
@@ -34,7 +38,7 @@ srun python -u -m main \
   lr_scheduler.num_warmup_steps=500 \
   trainer.val_check_interval=1000 \
   trainer.max_steps=50000 \
-  loader.global_batch_size=128 \
+  loader.global_batch_size=${GLOBAL_BATCH_SIZE:-128} \
   training.ema=0.999 \
   algo.update_teacher_every=10000 \
   optim.lr=6e-5 \
