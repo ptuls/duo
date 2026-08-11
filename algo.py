@@ -804,6 +804,21 @@ class GMCD(MDLM):
       'algo.T sets the base of the dt doubling schedule; '
       'use e.g. algo.T=64.')
 
+  def on_save_checkpoint(self, checkpoint):
+    # The teacher is a lazily-created deepcopy of the backbone, so it lands
+    # in the state dict as teacher.* and doubles checkpoint size. Strip it;
+    # it is reconstructed on the first training step after load.
+    checkpoint['state_dict'] = collections.OrderedDict(
+      (k, v) for k, v in checkpoint['state_dict'].items()
+      if not k.startswith('teacher'))
+    super().on_save_checkpoint(checkpoint)
+
+  def on_load_checkpoint(self, checkpoint):
+    checkpoint['state_dict'] = collections.OrderedDict(
+      (k, v) for k, v in checkpoint['state_dict'].items()
+      if not k.startswith('teacher'))
+    super().on_load_checkpoint(checkpoint)
+
   def _maybe_update_teacher_weights(self):
     if self.global_step % self.update_teacher_every != 0:
       return
@@ -819,7 +834,14 @@ class GMCD(MDLM):
   def _teacher_logits(self, xs, sigma):
     if self.teacher is None:
       self.teacher = copy.deepcopy(self.backbone)
+      for p in self.teacher.parameters():
+        p.requires_grad_(False)
     self._maybe_update_teacher_weights()
+    # The teacher is a registered submodule, so model.train() would flip it
+    # back into training mode and re-enable dropout, injecting noise into the
+    # consistency target. Force eval() on every call (no_grad alone does not
+    # disable dropout).
+    self.teacher.eval()
 
     sigma = self._process_sigma(sigma)
     with torch.amp.autocast('cuda', dtype=torch.float32):
@@ -877,17 +899,32 @@ class GMCD(MDLM):
       log_x_theta_student = log_x_theta_student.to(torch.float64)
       log_x_theta_teacher = log_x_theta_teacher.to(torch.float64)
 
+    # The loss lives on tokens masked at t (unmasked ones carry over under
+    # SUBS). Split them by their status at s:
+    #   revealed in (s, t]: the teacher saw the token unmasked, so SUBS makes
+    #     its distribution a delta on the true token. Reverse KL against a
+    #     delta is infinite, so use forward cross-entropy for these regardless
+    #     of loss_type (forward KL against a delta equals this CE, so kl-fwd is
+    #     unchanged; this is what makes kl-bwd well-defined, matching MCD).
+    #   still masked at s (intersection): the teacher predicts a genuine
+    #     distribution, so the chosen KL direction applies.
+    masked_t = xt == self.mask_index
+    revealed = masked_t & (xs != self.mask_index)
+    intersection = masked_t & (xs == self.mask_index)
+
+    ce = -torch.gather(
+      log_x_theta_student, -1, x0.unsqueeze(-1)).squeeze(-1)
     if self.loss_type == 'kl-fwd':
       kl = (log_x_theta_teacher.exp() * (
         log_x_theta_teacher - log_x_theta_student)).sum(-1)
     else:  # kl-bwd
       kl = (log_x_theta_student.exp() * (
         log_x_theta_student - log_x_theta_teacher)).sum(-1)
-    # Unmasked positions carry over deterministically under SUBS
-    # (student and teacher agree exactly), so the loss lives on the
-    # tokens masked at level t.
-    return torch.where(xt == self.mask_index, kl,
-                       torch.zeros_like(kl))
+
+    per_token = torch.zeros_like(ce)
+    per_token = torch.where(intersection, kl, per_token)
+    per_token = torch.where(revealed, ce, per_token)
+    return per_token
 
   def training_step(self, batch, batch_idx):
     self.log(name='dt',

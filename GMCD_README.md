@@ -19,9 +19,29 @@ Additions for the Gumbel-lift paper (`~/work/diffusion-algorithimic-information-
 - `scripts/run_first_session.sh`: 1-GPU de-risking session (checkpoint check
   -> teacher baseline -> E3 grids). Run this FIRST.
 - `scripts/smoke_gmcd.py`: CPU smoke test of GMCD (passing).
+- `tests/test_gmcd.py`: regression suite (checkpoint round-trip, teacher
+  determinism, kl-bwd finiteness, coupling, dt boundaries). `pytest tests/test_gmcd.py`.
+
+## Review fixes (post code-review)
+
+- Checkpoints strip `teacher.*` keys (`on_save/on_load_checkpoint`) so they
+  reload and resume (teacher is rebuilt lazily on the first step).
+- Teacher forced to `eval()` on every call: it is a registered submodule, so
+  `model.train()` would otherwise re-enable dropout and add noise to targets.
+- `kl-bwd` uses forward cross-entropy on tokens revealed in (s, t] (where SUBS
+  makes the teacher a delta and reverse KL is infinite); the chosen KL applies
+  only on the still-masked intersection. `kl-fwd` is unchanged.
+
+## Known accepted risks
+
+- `trainer_base.py` uses `trust_remote_code=True` for HF backbones and loads
+  pickle caches (Duo integral cache). Standard research conveniences; only run
+  with trusted checkpoints and data.
 
 ## Portability patches (for non-cluster boxes)
 
+- `configs/config.yaml`: `num_workers` resolver falls back to `cpu_count()`
+  when `os.sched_getaffinity` is absent (macOS).
 - `dataloader.py`: guard `os.sched_getaffinity` (absent on macOS).
 - `models/dit.py`: pure-torch rotary + SDPA fallback when `flash_attn` is
   unavailable. On A100s install flash-attn and this path is unused.
