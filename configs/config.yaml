@@ -21,6 +21,8 @@ loader:
   eval_batch_size: ${div_up:${.eval_global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
   num_workers: ${eval:"len(__import__('os').sched_getaffinity(0))"}
   pin_memory: True
+  persistent_workers: False  # True keeps dataloader workers alive (faster with
+                             # frequent validation, but can hang exit off-Slurm)
 
 sampling:
   predictor: ancestral  # ancestral_cache (only for MDLM), ancestral, analytic, psi (for psi-samplers)

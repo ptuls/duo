@@ -212,6 +212,22 @@ def _train(diffusion_model, config, logger, tokenizer):
     strategy=hydra.utils.instantiate(config.strategy),
     logger=wandb_logger)
   trainer.fit(model, train_ds, valid_ds, ckpt_path=ckpt_path)
+  _clean_shutdown(wandb_logger)
+
+
+def _clean_shutdown(wandb_logger=None):
+  """Release resources so the process exits without a manual interrupt.
+
+  Off-Slurm there is no job reaper, so we must finalize wandb and tear down
+  the distributed process group ourselves; otherwise the run hangs at exit.
+  """
+  try:
+    if wandb_logger is not None:
+      wandb_logger.experiment.finish()
+  except Exception:  # noqa: BLE001 - best-effort finalize
+    pass
+  if torch.distributed.is_available() and torch.distributed.is_initialized():
+    torch.distributed.destroy_process_group()
 
 
 def _eval_fid(diffusion_model, config, logger, tokenizer):
