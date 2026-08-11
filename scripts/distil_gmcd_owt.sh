@@ -45,5 +45,5 @@ python -u -m main \
   trainer.limit_val_batches=8 \
   algo.teacher_ema=False \
   algo.linear_growth_dt=false \
-  +wandb.offline=true \
-  "$@"   # extra hydra overrides win (e.g. trainer.max_steps=50)
+  +wandb.offline=${WANDB_OFFLINE:-false} \
+  "$@"   # extra overrides win, e.g. wandb.entity=you wandb.name=gmcd-run1 trainer.max_steps=50
