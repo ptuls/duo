@@ -98,6 +98,7 @@ trainer:
 
 wandb:
   project: duo
+  entity: null  # null -> your default W&B entity; override with wandb.entity=<user/team>
   group: null
   job_type: null
   name: null
