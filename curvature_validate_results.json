@@ -1,0 +1,124 @@
+{
+  "config": {
+    "n_states": 4,
+    "mask_frac": 0.5,
+    "n_probes": 2,
+    "eps": 0.1,
+    "in_scale": 6.0,
+    "max_candidates": 6
+  },
+  "correlation_and_enrichment": {
+    "correctness": {
+      "curvature": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      },
+      "curvature_shuffled": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      },
+      "curvature_diag": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      },
+      "entropy": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      },
+      "max_prob": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      },
+      "margin": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      },
+      "score_mag": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      },
+      "random": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.9999
+      }
+    },
+    "stability": {
+      "curvature": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.4791
+      },
+      "curvature_shuffled": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.4791
+      },
+      "curvature_diag": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.4791
+      },
+      "entropy": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.4791
+      },
+      "max_prob": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.4791
+      },
+      "margin": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.4791
+      },
+      "score_mag": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 0.4791
+      },
+      "random": {
+        "spearman": -0.1879,
+        "top_decile_enrichment": 0.9582
+      }
+    },
+    "oracle_gain": {
+      "curvature": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      },
+      "curvature_shuffled": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      },
+      "curvature_diag": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      },
+      "entropy": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      },
+      "max_prob": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      },
+      "margin": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      },
+      "score_mag": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      },
+      "random": {
+        "spearman": 0.0,
+        "top_decile_enrichment": 1.0
+      }
+    }
+  },
+  "position_selection_regret": {
+    "curvature": 0.0,
+    "curvature_shuffled": 0.0,
+    "curvature_diag": 0.0,
+    "entropy": 0.0,
+    "max_prob": 0.0,
+    "margin": 0.0,
+    "score_mag": 0.0,
+    "random": 0.0
+  }
+}

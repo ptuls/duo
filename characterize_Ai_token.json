@@ -1,0 +1,26 @@
+{
+  "effective_support": {
+    "participation_ratio_median": 50257.0,
+    "participation_ratio_p90": 50257.0,
+    "entropy_median_nats": 10.825,
+    "n_tokens_for_90pct_median": 45216,
+    "n_tokens_for_90pct_p90": 45216,
+    "vocab_size": 50258
+  },
+  "residual": {
+    "full_corr": 0.0,
+    "null_corr": 0.0,
+    "grid": {
+      "m8_B3": {
+        "corr": 0.0,
+        "pct_of_full": 0,
+        "beats_null": false
+      },
+      "m32_B3": {
+        "corr": 0.0,
+        "pct_of_full": 0,
+        "beats_null": false
+      }
+    }
+  }
+}

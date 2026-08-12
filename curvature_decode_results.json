@@ -1,0 +1,58 @@
+[
+  {
+    "order": "confidence",
+    "n_steps": 4,
+    "nfe_per_pass": 4.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 0.17502508300822228
+  },
+  {
+    "order": "confidence",
+    "n_steps": 8,
+    "nfe_per_pass": 8.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 0.29658437496982515
+  },
+  {
+    "order": "entropy",
+    "n_steps": 4,
+    "nfe_per_pass": 4.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 0.15642779099289328
+  },
+  {
+    "order": "entropy",
+    "n_steps": 8,
+    "nfe_per_pass": 8.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 0.3375282919732854
+  },
+  {
+    "order": "curvature",
+    "n_steps": 4,
+    "nfe_per_pass": 16.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 1.962410334032029
+  },
+  {
+    "order": "curvature",
+    "n_steps": 8,
+    "nfe_per_pass": 32.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 3.9216982499929145
+  },
+  {
+    "order": "random",
+    "n_steps": 4,
+    "nfe_per_pass": 4.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 0.1634446249809116
+  },
+  {
+    "order": "random",
+    "n_steps": 8,
+    "nfe_per_pass": 8.0,
+    "distinct2": 0.004032258064516129,
+    "wall_seconds": 0.32449008396361023
+  }
+]
