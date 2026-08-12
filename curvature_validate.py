@@ -115,7 +115,7 @@ def _shuffle_masked(x, masked, gen):
   for b in range(x.shape[0]):
     idx = masked[b].nonzero(as_tuple=True)[0]
     if len(idx) > 1:
-      perm = idx[torch.randperm(len(idx), generator=gen)]
+      perm = idx[torch.randperm(len(idx), device=idx.device, generator=gen)]
       y[b, idx] = x[b, perm]
   return y
 
@@ -153,7 +153,7 @@ def _leave_one_out_stability(model, z, x0, masked, argmax_now, args):
   for b in range(z.shape[0]):
     cand = masked[b].nonzero(as_tuple=True)[0]
     if len(cand) > args.max_candidates:
-      cand = cand[torch.randperm(len(cand))[:args.max_candidates]]
+      cand = cand[torch.randperm(len(cand), device=cand.device)[:args.max_candidates]]
     for i in cand.tolist():
       zc = torch.where(masked[b], x0[b], z[b]).clone()
       zc[i] = model.mask_index  # keep i masked, rest = GT
@@ -172,7 +172,7 @@ def oracle_gain(model, z, x0, masked, logp, args):
   for b in range(z.shape[0]):
     cand = masked[b].nonzero(as_tuple=True)[0]
     if len(cand) > args.max_candidates:
-      cand = cand[torch.randperm(len(cand))[:args.max_candidates]]
+      cand = cand[torch.randperm(len(cand), device=cand.device)[:args.max_candidates]]
     for i in cand.tolist():
       zc = z[b].clone()
       zc[i] = argmax_now[b, i]  # commit i
