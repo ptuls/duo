@@ -52,3 +52,21 @@ Additions for the Gumbel-lift paper (`~/work/diffusion-algorithimic-information-
 
 Then the 1-GPU G-MCD smoke, then the 8-GPU ablation
 (loss_type in {kl-fwd,kl-bwd} x teacher_temp_start in {1.0,0.96}).
+
+## E3: curvature-aware decoding (level-two flagship)
+
+`curvature_decode.py` (+ `scripts/run_curvature_decode.sh`). MaskGIT-style
+iterative unmasking where the commit order is set by posterior curvature instead
+of confidence. Curvature reads the continuous logit coordinate (the DiT's
+soft-input path `softmax(l)@E`, x.ndim==3) via a Hutchinson estimate of the
+output-vs-input Jacobian trace, so it cannot reduce to the first-order
+prediction. Orders compared: confidence (standard), entropy (first-order
+control), curvature (ours), random. Metrics: gen_ppl + distinct-2 at
+steps {4,8,16,32}. The decisive contrast is curvature vs entropy.
+
+Status: plumbing smoke-tested on CPU (toy model). **Not yet validated on a
+trained model.** Two things to calibrate on GPU before trusting results:
+1. `--in-scale`: too high saturates softmax and the sensitivity -> 0; check the
+   curvature scores have spread across positions.
+2. `--n-probes` / `--eps`: enough probes for a stable estimate.
+Cost: curvature costs ~(n_probes+2)x the forwards of confidence per step.
