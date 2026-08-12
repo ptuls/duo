@@ -64,9 +64,13 @@ def real_batch(model, n, L, device, seed):
       while len(buf) >= L:
         rows.append(buf[:L]); buf = buf[L:]
         if len(rows) >= n:
+          print(f'[data] using real OpenWebText ({n} sequences)', flush=True)
           return torch.tensor(rows, device=device)
-  except Exception:
-    pass
+  except Exception as e:
+    print(f'[data] OWT load failed ({type(e).__name__}: {e})', flush=True)
+  print('[data] WARNING: falling back to RANDOM tokens. Results are NOT a real '
+        'validation (model predictions on non-language are noise). Fix data '
+        'access before trusting any numbers.', flush=True)
   g = torch.Generator().manual_seed(seed)
   return torch.randint(0, model.vocab_size - 1, (n, L), generator=g).to(device)
 
