@@ -933,3 +933,106 @@ class GMCD(MDLM):
              on_epoch=False,
              sync_dist=True)
     return super().training_step(batch, batch_idx)
+
+
+class ErlangMDLM(MDLM):
+  """Semi-Markov (Erlang-k) masked diffusion: k shades of masking.
+
+  Realizes the semi-Markov extension of App. "Semi-Markov masking". Each
+  token's reveal level advances through k stages (total holding time
+  Erlang-k), so the input the denoiser sees is a graded mixture of the true
+  token and [MASK] rather than a hard binary mask. k=1 is the standard
+  exponential (memoryless) MDLM and this class reduces to it exactly.
+
+  Forward. At schedule level t (marginal absorbing prob 1 - alpha_t), each
+  token's phase j in {0..k} is the number of fired stages, drawn so that the
+  fully-masked event (j=k) has probability 1 - alpha_t, i.e. per-stage
+  success s_t = (1 - alpha_t)^{1/k} and j ~ Binomial(k, s_t). The reveal
+  fraction is r = 1 - j/k (1 clean, 0 fully masked).
+
+  Input. The graded embedding is read through the backbone's weighted
+  embedding_bag path: index pair [x0, mask] with weights [r, 1 - r]. At the
+  endpoints (r in {0, 1}) this is byte-identical to MDLM's hard token / mask
+  embedding, so the inherited MDLM ancestral sampler is used unchanged at
+  inference and gen_ppl stays directly comparable. The intermediate shades
+  only enrich the training signal.
+
+  Loss. A reveal-weighted denoising cross-entropy: the MDLM continuous-time
+  weight dalpha_t/(1-alpha_t) times the masked fraction j/k, so fully-masked
+  positions carry the full MDLM weight and clean positions carry none. At
+  k=1 (j in {0,1}) this is exactly the MDLM SUBS objective. For k>1 it is an
+  approximate objective (not the exact Erlang ELBO), documented as such; the
+  question it exists to answer is whether phase-graded training lowers
+  gen_ppl over plain masking.
+  """
+
+  def __init__(self, config, tokenizer):
+    super().__init__(config, tokenizer)
+    self.erlang_k = int(config.algo.erlang_k)
+    self.save_hyperparameters()
+
+  def _validate_configuration(self):
+    super()._validate_configuration()
+    # Runs inside MDLM.__init__ before self.erlang_k is set, so read config.
+    assert int(self.config.algo.erlang_k) >= 1, \
+      'algo.erlang_k must be >= 1 (1 = plain MDLM).'
+    # Mean-parameterized graded head; SUBS delta forcing does not apply to
+    # graded inputs. Inference still uses the inherited hard-state sampler.
+    assert self.parameterization in {'subs', 'mean'}
+
+  def _sample_phase(self, x0, alpha_t):
+    """Per-token fired-stage count j in {0..k}, j ~ Binomial(k, s_t) with
+    s_t = (1 - alpha_t)^{1/k}. BOS is held clean when ignore_bos is set."""
+    k = self.erlang_k
+    s_t = (1.0 - alpha_t).clamp(min=0.0, max=1.0) ** (1.0 / k)  # (B, 1)
+    u = torch.rand(*x0.shape, k, device=x0.device)             # (B, L, k)
+    phase = (u < s_t[..., None]).sum(dim=-1)                    # (B, L) in {0..k}
+    if self.ignore_bos:
+      phase[:, 0] = 0
+    return phase
+
+  def _graded_logits(self, x0, phase, sigma, labels):
+    """Backbone forward on the graded [token, mask] mixture, mean-normalized
+    over the vocabulary with the mask index removed."""
+    reveal = 1.0 - phase.float() / self.erlang_k               # (B, L)
+    idx = torch.stack(
+      [x0, torch.full_like(x0, self.mask_index)], dim=-1)      # (B, L, 2)
+    w = torch.stack([reveal, 1.0 - reveal], dim=-1)            # (B, L, 2)
+    sigma = self._process_sigma(sigma)
+    with torch.amp.autocast('cuda', dtype=torch.float32):
+      model_output = self.backbone(
+        x=idx, sigma=sigma, class_cond=labels, weights=w)
+    model_output[:, :, self.mask_index] += self.neg_infinity
+    model_output = model_output - torch.logsumexp(
+      model_output, dim=-1, keepdim=True)
+    return model_output, reveal
+
+  def nll(self, x0, labels, output_tokens,
+          current_accumulation_step=None, train_mode=False):
+    del output_tokens, train_mode
+    t = self._sample_t(x0.shape[0], current_accumulation_step)
+    if self.T > 0:
+      t = (t * self.T).to(torch.int)
+      t = t / self.T
+      t += (1 / self.T)
+    dalpha_t, alpha_t = self.noise(t)
+    alpha_t = alpha_t.unsqueeze(-1)
+    dalpha_t = dalpha_t.unsqueeze(-1)
+    sigma = self._sigma_from_alphat(alpha_t)
+
+    if self.class_conditional:
+      assert labels is not None
+      rand = torch.rand(size=labels.shape, dtype=torch.float32,
+                        device=self.device)
+      labels = torch.where(rand < self.class_cond_dropout,
+                           self.num_classes, labels)
+    else:
+      assert labels is None
+
+    phase = self._sample_phase(x0, alpha_t)
+    log_x_theta, _ = self._graded_logits(x0, phase, sigma, labels)
+    utils.print_nans(log_x_theta, 'model_output')
+    log_p = torch.gather(
+      log_x_theta, dim=-1, index=x0[:, :, None]).squeeze(-1)   # (B, L)
+    masked_frac = phase.float() / self.erlang_k                # 1 at full mask
+    return log_p * (dalpha_t / (1 - alpha_t)) * masked_frac

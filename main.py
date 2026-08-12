@@ -334,6 +334,8 @@ def main(config):
     diffusion_model = algo.Distillation
   elif config.algo.name == 'gmcd':
     diffusion_model = algo.GMCD
+  elif config.algo.name == 'erlang_mdlm':
+    diffusion_model = algo.ErlangMDLM
   elif config.algo.name == 'ot-finetune':
     diffusion_model = algo.OptimalTransportFinetune
   else:
