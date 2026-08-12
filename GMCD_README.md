@@ -70,3 +70,20 @@ trained model.** Two things to calibrate on GPU before trusting results:
    curvature scores have spread across positions.
 2. `--n-probes` / `--eps`: enough probes for a stable estimate.
 Cost: curvature costs ~(n_probes+2)x the forwards of confidence per step.
+
+## E3 mechanism gate: validate curvature is a real signal FIRST
+
+`curvature_validate.py` (+ `scripts/run_curvature_validate.sh`). Before claiming
+better decoding, establish that the curvature statistic predicts, on real masked
+MDLM states, which position is safe to commit next. Targets: token correctness
+(p of true token), stability (does argmax-now survive resolving the rest of the
+context to GT -- the second-order property entropy cannot see), and oracle_gain
+(remaining NLL after committing i, over a try-every-candidate oracle). Controls:
+entropy, max_prob, logit margin, first-order score magnitude, random, and two
+nulls (curvature_shuffled, curvature_diag). Metrics: Spearman, top-decile
+enrichment, position-selection regret.
+
+**Gate:** curvature must beat entropy AND margin AND its shuffled null on
+stability. If not, do NOT run the decoding experiment -- a downstream win could
+not be attributed to the theory. Run this before run_curvature_decode.sh.
+Plumbing smoke-tested on CPU (toy); real signal needs the trained model on GPU.
