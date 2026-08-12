@@ -75,7 +75,7 @@ eval:
   # Extra generative-perplexity logging at few-step budgets, in addition to the
   # default sampling.steps run. This is the regime distillation actually
   # improves; logs val/gen_ppl@{k}step for each k. Empty list = off.
-  gen_ppl_step_budgets: [1, 2, 4, 8]  # few-step budgets; [] to disable
+  gen_ppl_step_budgets: [1, 2, 4, 8, 16]  # few-step budgets; [] to disable
   gen_ppl_sweep_sample_batches: 2     # sample batches per budget (kept small)
 
 optim:

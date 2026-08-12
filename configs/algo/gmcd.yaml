@@ -11,9 +11,10 @@ loss_type: kl-fwd  # kl-fwd / kl-bwd
 update_teacher_every: 10_000
 teacher_ema: False
 T: 64  # base of the dt doubling schedule (dt = 2^n / T)
-linear_growth_dt: False
+linear_growth_dt: True   # linear dt covers the full jump range (incl. few-step)
 linear_growth_min: 0.001
-linear_growth_max: 0.25
+linear_growth_max: 1.0    # reach dt=1 (1-step) by end of training; doubling only
+                          # reaches dt=1/16 in 50k steps, so few-step never trains
 
 # Teacher sharpening (1.0 disables; Latent Shadows uses 0.96 / 0.75 / 0.03)
 teacher_temp_start: 1.0

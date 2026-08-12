@@ -114,6 +114,7 @@ python -u -m main \
   optim.lr=6e-5 \
   trainer.limit_val_batches=8 \
   algo.teacher_ema=False \
-  algo.linear_growth_dt=false \
+  algo.linear_growth_dt=${LINEAR_GROWTH_DT:-true} \
+  algo.linear_growth_max=${LINEAR_GROWTH_MAX:-1.0} \
   +wandb.offline=${WANDB_OFFLINE:-false} \
   "$@"   # extra overrides win, e.g. wandb.entity=you wandb.name=gmcd-run1 trainer.max_steps=50
