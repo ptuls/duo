@@ -29,12 +29,18 @@ BATCH_SIZE=${BATCH_SIZE:-8}
 MODEL=${MODEL:-small}
 LENGTH=${LENGTH:-1024}
 DATA=${DATA:-openwebtext-split}
+# W&B: offline by default (no network/permission surprises mid-run). Set
+# WANDB_OFFLINE=False to stream live to wandb.ai; requires `wandb login` on the
+# box. entity=null in config.yaml uses your personal entity (avoids the org
+# "Create Run permission" error). Override project/entity via "$@" if needed,
+# e.g. wandb.project=erlang wandb.entity=<user>.
+WANDB_OFFLINE=${WANDB_OFFLINE:-True}
 export DUO_DATA_DIR=${DUO_DATA_DIR:-$PWD/data}
 mkdir -p "$DUO_DATA_DIR" watch_folder
 
 echo "[erlang] ablation over k in: $KS"
 echo "[erlang] data=$DATA steps=$STEPS batch=$BATCH_SIZE model=$MODEL length=$LENGTH"
-echo "[erlang] data cache: $DUO_DATA_DIR"
+echo "[erlang] data cache: $DUO_DATA_DIR  wandb offline: $WANDB_OFFLINE"
 
 # ------------------------------------------------------------------ preflight
 # Fail fast rather than a traceback minutes in, or a silent multi-hour
@@ -107,7 +113,7 @@ for k in $KS; do
     eval.gen_ppl_step_budgets="[1,2,4,8,16]" \
     trainer.max_steps="$STEPS" \
     wandb.name="erlang-k${k}-${DATA}" \
-    +wandb.offline=True \
+    +wandb.offline="$WANDB_OFFLINE" \
     "$@"
 done
 
