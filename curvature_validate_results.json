@@ -1,124 +1,318 @@
 {
   "config": {
-    "n_states": 4,
+    "model": "ckpt",
+    "checkpoint": "checkpoints/mdlm.ckpt",
+    "architecture": "small",
+    "disable_ema": false,
+    "n_states": 256,
+    "seq_len": 128,
     "mask_frac": 0.5,
-    "n_probes": 2,
+    "signal_scale": 1.0,
+    "gumbel_scale": 1.0,
+    "n_probes": 8,
     "eps": 0.1,
     "in_scale": 6.0,
-    "max_candidates": 6
+    "max_candidates": 32,
+    "batch_size": 16,
+    "seed": 0
+  },
+  "data": {
+    "requested_source": "openwebtext",
+    "actual_source": "openwebtext",
+    "random_fallback_allowed": false,
+    "masked_positions": 16217,
+    "candidate_positions": 8192
   },
   "correlation_and_enrichment": {
     "correctness": {
-      "curvature": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
-      },
-      "curvature_shuffled": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
-      },
-      "curvature_diag": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
-      },
       "entropy": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
+        "spearman": 0.7605,
+        "top_decile_mean": 0.9895,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.6275,
+        "top_decile_enrichment": 2.7329
+      },
+      "curvature": {
+        "spearman": 0.7459,
+        "top_decile_mean": 0.9901,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.6281,
+        "top_decile_enrichment": 2.7346
+      },
+      "gini": {
+        "spearman": 0.7459,
+        "top_decile_mean": 0.9901,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.6281,
+        "top_decile_enrichment": 2.7346
+      },
+      "distance_from_uniform": {
+        "spearman": 0.7369,
+        "top_decile_mean": 0.9041,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.542,
+        "top_decile_enrichment": 2.497
       },
       "max_prob": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
+        "spearman": 0.7314,
+        "top_decile_mean": 0.9505,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.5885,
+        "top_decile_enrichment": 2.6252
       },
       "margin": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
+        "spearman": 0.608,
+        "top_decile_mean": 0.9876,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.6255,
+        "top_decile_enrichment": 2.7276
       },
-      "score_mag": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
+      "curvature_shuffled": {
+        "spearman": 0.0643,
+        "top_decile_mean": 0.4057,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.0436,
+        "top_decile_enrichment": 1.1203
+      },
+      "sensitivity": {
+        "spearman": 0.009,
+        "top_decile_mean": 0.3835,
+        "overall_mean": 0.3621,
+        "top_decile_lift": 0.0214,
+        "top_decile_enrichment": 1.0591
       },
       "random": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.9999
+        "spearman": 0.0042,
+        "top_decile_mean": 0.3572,
+        "overall_mean": 0.3621,
+        "top_decile_lift": -0.0049,
+        "top_decile_enrichment": 0.9865
+      },
+      "sensitivity_shuffled": {
+        "spearman": -0.0137,
+        "top_decile_mean": 0.359,
+        "overall_mean": 0.3621,
+        "top_decile_lift": -0.003,
+        "top_decile_enrichment": 0.9916
       }
     },
     "stability": {
       "curvature": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.4791
+        "spearman": 0.6254,
+        "top_decile_mean": 0.9963,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.4891,
+        "top_decile_enrichment": 1.9644
       },
-      "curvature_shuffled": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.4791
-      },
-      "curvature_diag": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.4791
-      },
-      "entropy": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.4791
+      "gini": {
+        "spearman": 0.6254,
+        "top_decile_mean": 0.9963,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.4891,
+        "top_decile_enrichment": 1.9644
       },
       "max_prob": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.4791
+        "spearman": 0.624,
+        "top_decile_mean": 0.9707,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.4635,
+        "top_decile_enrichment": 1.9138
+      },
+      "entropy": {
+        "spearman": 0.6221,
+        "top_decile_mean": 0.9976,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.4904,
+        "top_decile_enrichment": 1.9668
+      },
+      "distance_from_uniform": {
+        "spearman": 0.6185,
+        "top_decile_mean": 0.9402,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.433,
+        "top_decile_enrichment": 1.8536
       },
       "margin": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.4791
+        "spearman": 0.5536,
+        "top_decile_mean": 0.9927,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.4855,
+        "top_decile_enrichment": 1.9572
       },
-      "score_mag": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 0.4791
+      "curvature_shuffled": {
+        "spearman": 0.0599,
+        "top_decile_mean": 0.569,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.0618,
+        "top_decile_enrichment": 1.1218
       },
       "random": {
-        "spearman": -0.1879,
-        "top_decile_enrichment": 0.9582
+        "spearman": 0.0149,
+        "top_decile_mean": 0.5226,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.0154,
+        "top_decile_enrichment": 1.0303
+      },
+      "sensitivity": {
+        "spearman": 0.0021,
+        "top_decile_mean": 0.5031,
+        "overall_mean": 0.5072,
+        "top_decile_lift": -0.0041,
+        "top_decile_enrichment": 0.9918
+      },
+      "sensitivity_shuffled": {
+        "spearman": 0.0008,
+        "top_decile_mean": 0.525,
+        "overall_mean": 0.5072,
+        "top_decile_lift": 0.0178,
+        "top_decile_enrichment": 1.0352
+      }
+    },
+    "stability_probability": {
+      "entropy": {
+        "spearman": 0.6988,
+        "top_decile_mean": 0.9974,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.5375,
+        "top_decile_enrichment": 2.1689
+      },
+      "curvature": {
+        "spearman": 0.6935,
+        "top_decile_mean": 0.996,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.5362,
+        "top_decile_enrichment": 2.1659
+      },
+      "gini": {
+        "spearman": 0.6935,
+        "top_decile_mean": 0.996,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.5362,
+        "top_decile_enrichment": 2.1659
+      },
+      "max_prob": {
+        "spearman": 0.6851,
+        "top_decile_mean": 0.9646,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.5048,
+        "top_decile_enrichment": 2.0977
+      },
+      "distance_from_uniform": {
+        "spearman": 0.6832,
+        "top_decile_mean": 0.9289,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.4691,
+        "top_decile_enrichment": 2.02
+      },
+      "margin": {
+        "spearman": 0.5974,
+        "top_decile_mean": 0.9929,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.5331,
+        "top_decile_enrichment": 2.1592
+      },
+      "curvature_shuffled": {
+        "spearman": 0.0538,
+        "top_decile_mean": 0.5216,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.0618,
+        "top_decile_enrichment": 1.1343
+      },
+      "sensitivity": {
+        "spearman": 0.0123,
+        "top_decile_mean": 0.462,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.0022,
+        "top_decile_enrichment": 1.0047
+      },
+      "random": {
+        "spearman": 0.012,
+        "top_decile_mean": 0.4701,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.0103,
+        "top_decile_enrichment": 1.0224
+      },
+      "sensitivity_shuffled": {
+        "spearman": -0.005,
+        "top_decile_mean": 0.4708,
+        "overall_mean": 0.4599,
+        "top_decile_lift": 0.0109,
+        "top_decile_enrichment": 1.0237
       }
     },
     "oracle_gain": {
+      "entropy": {
+        "spearman": 0.2315,
+        "top_decile_mean": -2.8922,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.2932
+      },
       "curvature": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
+        "spearman": 0.2075,
+        "top_decile_mean": -2.8936,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.2918
+      },
+      "gini": {
+        "spearman": 0.2075,
+        "top_decile_mean": -2.8936,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.2918
+      },
+      "distance_from_uniform": {
+        "spearman": 0.2047,
+        "top_decile_mean": -2.9273,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.2581
       },
       "curvature_shuffled": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
-      },
-      "curvature_diag": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
-      },
-      "entropy": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
+        "spearman": 0.2025,
+        "top_decile_mean": -2.8681,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.3173
       },
       "max_prob": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
+        "spearman": 0.1975,
+        "top_decile_mean": -2.962,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.2234
       },
       "margin": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
+        "spearman": 0.142,
+        "top_decile_mean": -2.9138,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.2716
       },
-      "score_mag": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
+      "sensitivity_shuffled": {
+        "spearman": 0.0009,
+        "top_decile_mean": -3.1385,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.0469
       },
       "random": {
-        "spearman": 0.0,
-        "top_decile_enrichment": 1.0
+        "spearman": -0.0018,
+        "top_decile_mean": -3.1887,
+        "overall_mean": -3.1854,
+        "top_decile_lift": -0.0033
+      },
+      "sensitivity": {
+        "spearman": -0.0248,
+        "top_decile_mean": -3.1832,
+        "overall_mean": -3.1854,
+        "top_decile_lift": 0.0022
       }
     }
   },
   "position_selection_regret": {
-    "curvature": 0.0,
-    "curvature_shuffled": 0.0,
-    "curvature_diag": 0.0,
-    "entropy": 0.0,
-    "max_prob": 0.0,
-    "margin": 0.0,
-    "score_mag": 0.0,
-    "random": 0.0
+    "curvature": 0.178,
+    "curvature_shuffled": 0.1738,
+    "gini": 0.178,
+    "sensitivity": 0.1667,
+    "sensitivity_shuffled": 0.1861,
+    "entropy": 0.1771,
+    "max_prob": 0.1711,
+    "margin": 0.1777,
+    "distance_from_uniform": 0.1703,
+    "random": 0.1818
   }
 }
