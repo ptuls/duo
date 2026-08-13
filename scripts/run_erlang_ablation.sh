@@ -35,6 +35,49 @@ echo "[erlang] ablation over k in: $KS"
 echo "[erlang] steps=$STEPS batch=$BATCH_SIZE model=$MODEL length=$LENGTH"
 echo "[erlang] data cache: $DUO_DATA_DIR"
 
+# ------------------------------------------------------------------ preflight
+# Fail fast rather than a traceback minutes in, or a silent multi-hour
+# OpenWebText re-tokenization. Skip with SKIP_PREFLIGHT=1.
+if [[ "${SKIP_PREFLIGHT:-0}" != "1" ]]; then
+  echo "[preflight] checking launch prerequisites..."
+  ok=1
+  # 1. GPU visible (this is a from-scratch training run, not CPU-viable).
+  if ! python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+    echo "  [FAIL] no CUDA GPU visible to torch. Set CUDA_VISIBLE_DEVICES and" >&2
+    echo "         check the driver (nvidia-smi). Override with SKIP_PREFLIGHT=1." >&2
+    ok=0
+  else
+    echo "  [ok]   CUDA GPU visible"
+  fi
+  # 2. Data cache dir writable.
+  if ! mkdir -p "$DUO_DATA_DIR" 2>/dev/null || [[ ! -w "$DUO_DATA_DIR" ]]; then
+    echo "  [FAIL] DUO_DATA_DIR not writable: $DUO_DATA_DIR" >&2
+    ok=0
+  else
+    echo "  [ok]   data cache dir writable ($DUO_DATA_DIR)"
+  fi
+  # 3. Is OpenWebText already tokenized here? The dataloader caches to
+  #    <cache>/openwebtext-split_<mode>_bs<block>_*.dat (a save_to_disk dir).
+  #    Building it downloads and tokenizes ~8M documents (hours), so refuse to
+  #    do it silently. Point DUO_DATA_DIR at an existing cache, or opt in.
+  if ! compgen -G "$DUO_DATA_DIR/openwebtext-split_*.dat" >/dev/null; then
+    if [[ "${ALLOW_OWT_BUILD:-0}" == "1" ]]; then
+      echo "  [warn] no tokenized OWT cache in $DUO_DATA_DIR; it will be built" \
+           "(download + tokenize, hours). Proceeding (ALLOW_OWT_BUILD=1)."
+    else
+      echo "  [FAIL] no tokenized OpenWebText cache in $DUO_DATA_DIR" >&2
+      echo "         (expected openwebtext-split_*.dat). Point DUO_DATA_DIR at" >&2
+      echo "         the cache your earlier runs used, or set ALLOW_OWT_BUILD=1" >&2
+      echo "         to build it now (download + tokenize, hours)." >&2
+      ok=0
+    fi
+  else
+    echo "  [ok]   tokenized OWT cache present"
+  fi
+  [[ "$ok" == "1" ]] || { echo "[preflight] aborting." >&2; exit 1; }
+  echo "[preflight] all checks passed."
+fi
+
 for k in $KS; do
   echo "======================================================================"
   echo "[erlang] === training k=$k ($([ "$k" = 1 ] && echo 'time-conditioned MDLM baseline' || echo 'Erlang phases')) ==="
