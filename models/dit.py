@@ -461,6 +461,12 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     dim = config.model.hidden_size
     cond_dim = config.model.cond_dim
     self.vocab_embed = EmbeddingLayer(dim, vocab_size)
+    self.phase_embed = None
+    if (config.algo.name == 'erlang_mdlm'
+        and int(config.algo.erlang_k) > 1):
+      self.phase_embed = nn.Embedding(
+        int(config.algo.erlang_k) + 1, dim)
+      nn.init.zeros_(self.phase_embed.weight)
     if not self.causal:
       self.sigma_map = TimestepEmbedder(cond_dim)
     self.rotary_emb = Rotary(dim // config.model.n_heads)
@@ -495,9 +501,15 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
     else:
       return  bias_dropout_add_scale_fused_inference
 
-  def forward(self, x, sigma, class_cond=None, weights=None):
+  def forward(self, x, sigma, class_cond=None, weights=None,
+              phase=None):
     assert class_cond is None, 'Not implemented for DiT'
     x = self.vocab_embed(x, weights)
+    if phase is not None and self.phase_embed is not None:
+      if phase.shape != x.shape[:2]:
+        raise ValueError(
+          f'phase shape {phase.shape} does not match tokens {x.shape[:2]}')
+      x = x + self.phase_embed(phase).to(x.dtype)
     if self.causal:
       t_cond = None
     else:

@@ -1,15 +1,15 @@
 name: erlang_mdlm
-backbone: dit  # dit / dimamba / hf_dit
-parameterization: subs  # inference reuses MDLM's SUBS sampler; the graded
-                         # training head is mean-normalized inline in nll()
-time_conditioning: False
+backbone: dit  # The augmented phase-embedding path is implemented for DiT.
+parameterization: subs
+time_conditioning: True
 T: 0  # continuous time
 subs_masking: False
 causal_attention: False
 ignore_bos: False
 loss_type: elbo
 
-# Semi-Markov (Erlang-k) masking: number of reveal stages per token.
-# k=1 recovers plain MDLM exactly; k>1 gives graded "shades of masking"
-# (holding time Erlang-k). Ablate k in {1, 2, 4, 8}.
+# Semi-Markov (Erlang-k) masking: number of sequential exponential stages.
+# k=1 recovers the standard absorbing process and objective. For k>1, visible
+# tokens carry a learned phase embedding until the final transition to [MASK].
+# Ablate k in {1, 2, 4, 8}.
 erlang_k: 2

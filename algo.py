@@ -936,103 +936,233 @@ class GMCD(MDLM):
 
 
 class ErlangMDLM(MDLM):
-  """Semi-Markov (Erlang-k) masked diffusion: k shades of masking.
+  """Semi-Markov masked diffusion on an Erlang-k augmented state.
 
-  Realizes the semi-Markov extension of App. "Semi-Markov masking". Each
-  token's reveal level advances through k stages (total holding time
-  Erlang-k), so the input the denoiser sees is a graded mixture of the true
-  token and [MASK] rather than a hard binary mask. k=1 is the standard
-  exponential (memoryless) MDLM and this class reduces to it exactly.
+  A token follows the sequential chain
 
-  Forward. At schedule level t (marginal absorbing prob 1 - alpha_t), each
-  token's phase j in {0..k} is the number of fired stages, drawn so that the
-  fully-masked event (j=k) has probability 1 - alpha_t, i.e. per-stage
-  success s_t = (1 - alpha_t)^{1/k} and j ~ Binomial(k, s_t). The reveal
-  fraction is r = 1 - j/k (1 clean, 0 fully masked).
+    (x, 0) -> (x, 1) -> ... -> (x, k - 1) -> ([MASK], k).
 
-  Input. The graded embedding is read through the backbone's weighted
-  embedding_bag path: index pair [x0, mask] with weights [r, 1 - r]. At the
-  endpoints (r in {0, 1}) this is byte-identical to MDLM's hard token / mask
-  embedding, so the inherited MDLM ancestral sampler is used unchanged at
-  inference and gen_ppl stays directly comparable. The intermediate shades
-  only enrich the training signal.
-
-  Loss. A reveal-weighted denoising cross-entropy: the MDLM continuous-time
-  weight dalpha_t/(1-alpha_t) times the masked fraction j/k, so fully-masked
-  positions carry the full MDLM weight and clean positions carry none. At
-  k=1 (j in {0,1}) this is exactly the MDLM SUBS objective. For k>1 it is an
-  approximate objective (not the exact Erlang ELBO), documented as such; the
-  question it exists to answer is whether phase-graded training lowers
-  gen_ppl over plain masking.
+  The number of completed stages at cumulative intensity Lambda is a Poisson
+  random variable, capped at k. Lambda is calibrated so that the absorbed
+  mass remains 1 - alpha_t, matching the MDLM mask schedule for every k.
+  Visible tokens remain known-correct under SUBS and receive a learned phase
+  embedding; only the final transition loses the token identity. The standard
+  MDLM loss therefore applies unchanged on absorbed positions. Generation
+  samples the exact finite-interval reverse posterior of the augmented chain.
   """
 
   def __init__(self, config, tokenizer):
+    raw_k = config.algo.erlang_k
+    if float(raw_k) != int(raw_k) or int(raw_k) < 1:
+      raise ValueError('algo.erlang_k must be a positive integer.')
+    if config.algo.backbone != 'dit':
+      raise ValueError(
+        'ErlangMDLM currently requires algo.backbone=dit for phase embeddings.')
     super().__init__(config, tokenizer)
-    self.erlang_k = int(config.algo.erlang_k)
+    self.erlang_k = int(raw_k)
     self.save_hyperparameters()
 
   def _validate_configuration(self):
     super()._validate_configuration()
-    # Runs inside MDLM.__init__ before self.erlang_k is set, so read config.
-    assert int(self.config.algo.erlang_k) >= 1, \
-      'algo.erlang_k must be >= 1 (1 = plain MDLM).'
-    # Mean-parameterized graded head; SUBS delta forcing does not apply to
-    # graded inputs. Inference still uses the inherited hard-state sampler.
-    assert self.parameterization in {'subs', 'mean'}
+    if self.parameterization != 'subs':
+      raise ValueError('ErlangMDLM requires algo.parameterization=subs.')
+    if not self.time_conditioning:
+      raise ValueError('ErlangMDLM requires algo.time_conditioning=True.')
+    if self.config.algo.causal_attention:
+      raise ValueError(
+        'ErlangMDLM requires causal_attention=False so DiT uses global time.')
+    if self.T != 0:
+      raise ValueError('ErlangMDLM implements the continuous-time objective.')
+    if self.subs_masking:
+      raise ValueError('ErlangMDLM does not use mean-parameterization masking.')
+    if self.loss_type != 'elbo':
+      raise ValueError('ErlangMDLM requires algo.loss_type=elbo.')
+    if self.class_conditional:
+      raise ValueError('Class-conditional ErlangMDLM is not implemented.')
+    if self.sampler != 'ancestral_cache':
+      raise ValueError(
+        'ErlangMDLM requires sampling.predictor=ancestral_cache.')
+    if self.config.sampling.semi_ar:
+      raise ValueError(
+        'ErlangMDLM does not yet implement semi-autoregressive sampling.')
+
+  def _erlang_survival(self, intensity):
+    """Returns P(Poisson(intensity) < k), the Erlang-k survival."""
+    shape = intensity.new_tensor(float(self.erlang_k))
+    return torch.special.gammaincc(shape, intensity)
+
+  def _erlang_intensity(self, alpha_t):
+    """Inverts Erlang survival so P(phase < k) equals alpha_t."""
+    finfo = torch.finfo(alpha_t.dtype)
+    target = alpha_t.clamp(min=finfo.tiny, max=1.0)
+    if self.erlang_k == 1:
+      intensity = -torch.log(target)
+      return torch.where(alpha_t >= 1.0,
+                         torch.zeros_like(intensity), intensity)
+
+    lower = torch.zeros_like(target)
+    upper = (-torch.log(target) + 2.0 * self.erlang_k
+             + 10.0 * self.erlang_k ** 0.5)
+    for _ in range(48):
+      midpoint = (lower + upper) / 2.0
+      survival = self._erlang_survival(midpoint)
+      lower = torch.where(survival > target, midpoint, lower)
+      upper = torch.where(survival > target, upper, midpoint)
+    intensity = (lower + upper) / 2.0
+    return torch.where(alpha_t >= 1.0,
+                       torch.zeros_like(intensity), intensity)
+
+  def _phase_probabilities(self, intensity):
+    """Returns probabilities for phases 0, ..., k-1, and absorbed k."""
+    probabilities = []
+    probability = torch.exp(-intensity)
+    for phase in range(self.erlang_k):
+      if phase > 0:
+        probability = probability * intensity / phase
+      probabilities.append(probability)
+    shape = intensity.new_tensor(float(self.erlang_k))
+    probabilities.append(torch.special.gammainc(shape, intensity))
+    return torch.stack(probabilities, dim=-1)
 
   def _sample_phase(self, x0, alpha_t):
-    """Per-token fired-stage count j in {0..k}, j ~ Binomial(k, s_t) with
-    s_t = (1 - alpha_t)^{1/k}. BOS is held clean when ignore_bos is set."""
-    k = self.erlang_k
-    s_t = (1.0 - alpha_t).clamp(min=0.0, max=1.0) ** (1.0 / k)  # (B, 1)
-    u = torch.rand(*x0.shape, k, device=x0.device)             # (B, L, k)
-    phase = (u < s_t[..., None]).sum(dim=-1)                    # (B, L) in {0..k}
+    """Samples the capped Poisson phase at time t."""
+    intensity = self._erlang_intensity(alpha_t)
+    phase = torch.poisson(intensity.expand_as(x0)).to(torch.long)
+    phase.clamp_(max=self.erlang_k)
     if self.ignore_bos:
       phase[:, 0] = 0
     return phase
 
-  def _graded_logits(self, x0, phase, sigma, labels):
-    """Backbone forward on the graded [token, mask] mixture, mean-normalized
-    over the vocabulary with the mask index removed."""
-    reveal = 1.0 - phase.float() / self.erlang_k               # (B, L)
-    idx = torch.stack(
-      [x0, torch.full_like(x0, self.mask_index)], dim=-1)      # (B, L, 2)
-    w = torch.stack([reveal, 1.0 - reveal], dim=-1)            # (B, L, 2)
+  def _phase_logits(self, xt, phase, sigma, labels=None):
+    """Runs the denoiser on hard tokens plus the augmented phase."""
     sigma = self._process_sigma(sigma)
     with torch.amp.autocast('cuda', dtype=torch.float32):
       model_output = self.backbone(
-        x=idx, sigma=sigma, class_cond=labels, weights=w)
-    model_output[:, :, self.mask_index] += self.neg_infinity
-    model_output = model_output - torch.logsumexp(
-      model_output, dim=-1, keepdim=True)
-    return model_output, reveal
+        x=xt, sigma=sigma, class_cond=labels, phase=phase)
+    return self._process_model_output(model_output, xt, sigma)
+
+  def _masked_phase_posterior(self, intensity_s, intensity_t):
+    """Computes q(phase_s | phase_t=k) for a finite reverse step."""
+    increment = (intensity_t - intensity_s).clamp(min=0.0)
+    numerators = []
+    probability_s = torch.exp(-intensity_s)
+    for phase_s in range(self.erlang_k):
+      if phase_s > 0:
+        probability_s = probability_s * intensity_s / phase_s
+      stages_left = increment.new_tensor(
+        float(self.erlang_k - phase_s))
+      finishes = torch.special.gammainc(stages_left, increment)
+      numerators.append(probability_s * finishes)
+    absorbed_shape = intensity_s.new_tensor(float(self.erlang_k))
+    numerators.append(
+      torch.special.gammainc(absorbed_shape, intensity_s))
+    posterior = torch.stack(numerators, dim=-1)
+    return posterior / posterior.sum(dim=-1, keepdim=True).clamp_min(
+      torch.finfo(posterior.dtype).tiny)
+
+  def _reverse_phase_step(self, phase_t, intensity_s, intensity_t):
+    """Samples the earlier phase conditional on the later phase."""
+    ratio = torch.where(
+      intensity_t > 0,
+      intensity_s / intensity_t,
+      torch.zeros_like(intensity_t)).clamp(0.0, 1.0)
+    visible_phase_s = torch.binomial(
+      phase_t.to(intensity_t.dtype), ratio.expand_as(phase_t)).to(torch.long)
+
+    masked_posterior = self._masked_phase_posterior(
+      intensity_s, intensity_t)
+    masked_posterior = masked_posterior.expand(
+      *phase_t.shape, self.erlang_k + 1)
+    masked_phase_s = trainer_base.sample_categorical(masked_posterior)
+    return torch.where(
+      phase_t == self.erlang_k, masked_phase_s, visible_phase_s)
+
+  def _reverse_update(self, x, phase, t, dt=None,
+                      noise_removal_step=False):
+    """Samples one exact finite-interval reverse transition."""
+    _, alpha_t = self.noise(t)
+    if noise_removal_step:
+      alpha_s = torch.ones_like(alpha_t)
+    else:
+      _, alpha_s = self.noise(t - dt)
+    intensity_t = self._erlang_intensity(alpha_t)
+    intensity_s = self._erlang_intensity(alpha_s)
+
+    sigma = self._sigma_from_alphat(alpha_t)
+    log_x0 = self._phase_logits(x, phase, sigma)
+    if self.config.sampling.use_float64:
+      log_x0 = log_x0.to(torch.float64)
+    if self.p_nucleus < 1:
+      log_x0 = utils.top_k_top_p_filtering(
+        log_x0, top_p=self.p_nucleus)
+    x0_sample = trainer_base.sample_categorical(log_x0.exp())
+
+    phase_s = self._reverse_phase_step(
+      phase, intensity_s, intensity_t)
+    newly_visible = ((phase == self.erlang_k)
+                     & (phase_s < self.erlang_k))
+    x_s = torch.where(newly_visible, x0_sample, x)
+    x_s = torch.where(
+      phase_s == self.erlang_k,
+      torch.full_like(x_s, self.mask_index), x_s)
+    if self.ignore_bos:
+      phase_s[:, 0] = 0
+    return x_s, phase_s
 
   def nll(self, x0, labels, output_tokens,
           current_accumulation_step=None, train_mode=False):
     del output_tokens, train_mode
+    if labels is not None:
+      raise ValueError('Class-conditional ErlangMDLM is not implemented.')
     t = self._sample_t(x0.shape[0], current_accumulation_step)
-    if self.T > 0:
-      t = (t * self.T).to(torch.int)
-      t = t / self.T
-      t += (1 / self.T)
     dalpha_t, alpha_t = self.noise(t)
     alpha_t = alpha_t.unsqueeze(-1)
     dalpha_t = dalpha_t.unsqueeze(-1)
     sigma = self._sigma_from_alphat(alpha_t)
 
-    if self.class_conditional:
-      assert labels is not None
-      rand = torch.rand(size=labels.shape, dtype=torch.float32,
-                        device=self.device)
-      labels = torch.where(rand < self.class_cond_dropout,
-                           self.num_classes, labels)
-    else:
-      assert labels is None
-
     phase = self._sample_phase(x0, alpha_t)
-    log_x_theta, _ = self._graded_logits(x0, phase, sigma, labels)
+    xt = torch.where(
+      phase == self.erlang_k,
+      torch.full_like(x0, self.mask_index), x0)
+    log_x_theta = self._phase_logits(xt, phase, sigma)
     utils.print_nans(log_x_theta, 'model_output')
-    log_p = torch.gather(
-      log_x_theta, dim=-1, index=x0[:, :, None]).squeeze(-1)   # (B, L)
-    masked_frac = phase.float() / self.erlang_k                # 1 at full mask
-    return log_p * (dalpha_t / (1 - alpha_t)) * masked_frac
+    return self.nll_per_token(
+      log_x_theta=log_x_theta,
+      xt=xt,
+      x0=x0,
+      alpha_t=alpha_t,
+      dalpha_t=dalpha_t)
+
+  @torch.no_grad()
+  def generate_samples(self, num_samples, labels=None,
+                       num_steps=None, eps=1e-5):
+    """Generates samples with the augmented Erlang reverse chain."""
+    if labels is not None:
+      raise ValueError('Class-conditional ErlangMDLM is not implemented.')
+    if num_steps is None:
+      num_steps = self.config.sampling.steps
+
+    x = self.prior_sample(num_samples, self.num_tokens)
+    phase = torch.full_like(x, self.erlang_k)
+    if self.ignore_bos:
+      x[:, 0] = self.tokenizer.bos_token_id
+      phase[:, 0] = 0
+    timesteps = self._get_sampling_time_profile(
+      eps, num_steps).to(self.device)
+    for step in range(num_steps):
+      t = timesteps[step] * torch.ones(
+        x.shape[0], 1, device=self.device)
+      dt = timesteps[step] - timesteps[step + 1]
+      x, phase = self._reverse_update(x, phase, t, dt)
+
+    t0 = timesteps[-1] * torch.ones(
+      x.shape[0], 1, device=self.device)
+    if self.config.sampling.noise_removal == 'ancestral':
+      x, phase = self._reverse_update(
+        x, phase, t0, noise_removal_step=True)
+    elif self.config.sampling.noise_removal == 'greedy':
+      alpha_t = self.noise(t0)[1]
+      sigma = self._sigma_from_alphat(alpha_t)
+      predictions = self._phase_logits(x, phase, sigma).argmax(dim=-1)
+      x = torch.where(phase == self.erlang_k, predictions, x)
+    return x

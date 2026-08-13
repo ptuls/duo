@@ -158,31 +158,32 @@ MDLM on GPU. This must pass before building the augmented-state model.
 
 `algo.ErlangMDLM` (`configs/algo/erlang.yaml`, `algo=erlang`). The real-model
 test of the semi-Markov appendix ("Semi-Markov masking: age-dependent hazards
-and Erlang shades"). Each token's reveal level advances through `k` stages
-(total holding time Erlang-k), so the denoiser sees a graded mixture of the
-true token and `[MASK]` rather than a hard binary mask -- "k shades of masking".
-`k=1` is the memoryless exponential = plain MDLM.
+and Erlang shades"). Each token advances through the enlarged Markov chain
+`(x,0) -> ... -> (x,k-1) -> ([MASK],k)`. The total holding time is Erlang-k;
+`k=1` is the standard memoryless absorbing process.
 
-- Forward: phase `j ~ Binomial(k, (1-alpha_t)^{1/k})`, so `P(fully masked)` still
-  equals `1 - alpha_t`; reveal fraction `r = 1 - j/k`.
-- Input: graded embedding via the backbone `embedding_bag` weighted path,
-  index pair `[token, mask]` with weights `[r, 1-r]`. At the endpoints
-  (`r in {0,1}`) this is byte-identical to MDLM's hard mask/token embedding, so
-  the inherited MDLM ancestral sampler runs unchanged and gen_ppl stays
-  comparable. Only intermediate shades enrich the training signal.
-- Loss: reveal-weighted denoising CE = MDLM continuous weight
-  `dalpha_t/(1-alpha_t)` times masked fraction `j/k`. Reduces exactly to the
-  MDLM SUBS objective at `k=1`; for `k>1` it is an approximate (not exact-ELBO)
-  objective, stated as such. The question it answers is empirical: does
-  phase-graded training lower gen_ppl over hard masking?
+- Forward: `j = min(Poisson(Lambda_t), k)`. `Lambda_t` is calibrated by the
+  Erlang survival equation so `P(j=k) = 1-alpha_t`, matching the MDLM mask
+  marginal for every `k`.
+- Input: phases below `k` retain the known-correct hard token and add a learned
+  phase embedding. Phase `k` uses the hard `[MASK]` token. The model also sees
+  global diffusion time.
+- Loss: the ordinary continuous-time MDLM SUBS objective. Visible phases carry
+  zero loss and absorbed positions carry the normal MDLM weight, so loss scale
+  does not change with `k`.
+- Inference: an augmented ancestral sampler uses the exact finite-interval
+  Poisson/Erlang reverse posterior. It tracks phases throughout generation and
+  reveals a predicted token only when a position exits phase `k`.
 
-`scripts/smoke_erlang.py` (CPU, passing): phase marginal, endpoint-embedding
-equivalence, exact `k=1` reduction to MDLM on masked positions (max|diff|=0),
-and finite backward for `k in {1,2,4}`.
+`tests/test_erlang_mdlm.py` covers Erlang marginal calibration, intermediate
+phase probabilities, the finite-interval reverse posterior, non-degenerate
+`k=1` equivalence, phase-embedding gradients, sampling, and configuration
+validation. `scripts/smoke_erlang.py` is a convenience wrapper for that suite.
 
 `scripts/run_erlang_ablation.sh`: controlled OWT ablation over `k in {1,2,4}`
 under identical settings, logging `val/gen_ppl` and few-step budgets. Since
-`k=1` is the MDLM baseline, any gen_ppl gap at `k>1` isolates the shades effect.
+`k=1` is the time-conditioned MDLM baseline, any gen_ppl gap at `k>1` isolates
+the augmented-phase effect within the same model family.
 This is the real-model counterpart of the analytic phase gate
 (`experiments/gumbel_lift/semimarkov_phase_gate.py`), which found the phase
 carries decision-relevant signal only for `k>1`.
