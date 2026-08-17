@@ -184,6 +184,16 @@ validation. `scripts/smoke_erlang.py` is a convenience wrapper for that suite.
 under identical settings, logging `val/gen_ppl` and few-step budgets. Since
 `k=1` is the time-conditioned MDLM baseline, any gen_ppl gap at `k>1` isolates
 the augmented-phase effect within the same model family.
+After the online runs finish, compare the latest completed run for each shape:
+
+```bash
+python scripts/compare_erlang_ablation.py \
+  --project duo --data openwebtext-split --ks 1 2 4
+```
+
+Pass `--entity <wandb-user-or-team>` if W&B cannot infer the entity, and
+`--csv erlang-comparison.csv` to save the raw metrics and percentage changes
+relative to `k=1`.
 This is the real-model counterpart of the analytic phase gate
 (`experiments/gumbel_lift/semimarkov_phase_gate.py`), which found the phase
 carries decision-relevant signal only for `k>1`.
