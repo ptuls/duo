@@ -71,6 +71,63 @@ def test_comparison_rows_compute_relative_change_from_k_one():
     assert rows[1]["val/nll"] is None
 
 
+def test_collect_seed_runs_groups_by_k_and_seed():
+    runs = [
+        _run("erlang-k1-owt-s0", "2026-08-16", summary={"val/ppl": 35.0}),
+        _run("erlang-k1-owt-s0", "2026-08-15", state="failed"),  # older, ignored
+        _run("erlang-k1-owt-s1", "2026-08-16", summary={"val/ppl": 35.4}),
+        _run("erlang-k2-owt-s0", "2026-08-16", summary={"val/ppl": 34.0}),
+        _run("erlang-k2-owt-s1", "2026-08-16", state="running"),  # not finished
+        _run("erlang-k9-owt-s0", "2026-08-16"),  # k not requested
+        _run("unrelated-run", "2026-08-16"),
+    ]
+
+    selected, roster = compare_erlang_ablation._collect_seed_runs(
+        runs, ks=[1, 2], data="owt", seeds=None, include_unfinished=False
+    )
+
+    assert selected[(1, 0)].created_at == "2026-08-16"  # newest finished
+    assert selected[(1, 1)] is not None
+    assert selected[(2, 0)] is not None
+    assert selected[(2, 1)] is None  # running, not included
+    # roster reports every (k, seed) including the skipped one
+    skipped = [r for r in roster if not r["used"]]
+    assert (2, 1) in {(r["k"], r["seed"]) for r in skipped}
+
+
+def test_aggregate_and_verdict_null_and_positive():
+    # k=1 seeds ~35.5, k=2 seeds ~35.4 (within noise) -> NULL for val/ppl.
+    selected = {
+        (1, 0): _run("erlang-k1-owt-s0", "d", summary={"val/ppl": 35.5}),
+        (1, 1): _run("erlang-k1-owt-s1", "d", summary={"val/ppl": 35.6}),
+        (2, 0): _run("erlang-k2-owt-s0", "d", summary={"val/ppl": 35.4}),
+        (2, 1): _run("erlang-k2-owt-s1", "d", summary={"val/ppl": 35.5}),
+    }
+    agg = compare_erlang_ablation._aggregate_by_k(selected, ["val/ppl"])
+    assert agg[1]["n_seeds"] == 2
+    assert agg[1]["val/ppl"]["mean"] == pytest.approx(35.55)
+    assert "NULL" in compare_erlang_ablation._verdict(agg, "val/ppl")
+
+    # k=2 clearly and consistently lower -> POSITIVE.
+    strong = {
+        (1, 0): _run("erlang-k1-owt-s0", "d", summary={"val/ppl": 35.5}),
+        (1, 1): _run("erlang-k1-owt-s1", "d", summary={"val/ppl": 35.6}),
+        (2, 0): _run("erlang-k2-owt-s0", "d", summary={"val/ppl": 30.0}),
+        (2, 1): _run("erlang-k2-owt-s1", "d", summary={"val/ppl": 30.1}),
+    }
+    agg2 = compare_erlang_ablation._aggregate_by_k(strong, ["val/ppl"])
+    assert "POSITIVE" in compare_erlang_ablation._verdict(agg2, "val/ppl")
+
+
+def test_verdict_needs_two_seeds():
+    selected = {
+        (1, 0): _run("erlang-k1-owt-s0", "d", summary={"val/ppl": 35.5}),
+        (2, 0): _run("erlang-k2-owt-s0", "d", summary={"val/ppl": 30.0}),
+    }
+    agg = compare_erlang_ablation._aggregate_by_k(selected, ["val/ppl"])
+    assert "Inconclusive" in compare_erlang_ablation._verdict(agg, "val/ppl")
+
+
 def test_project_path_uses_default_entity():
     api = SimpleNamespace(default_entity="paul")
 

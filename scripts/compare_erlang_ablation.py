@@ -4,6 +4,8 @@
 import argparse
 import csv
 import math
+import re
+import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -12,7 +14,12 @@ import wandb
 
 
 DEFAULT_BUDGETS = (1, 2, 4, 8, 16)
-BASE_METRICS = ("val/nll", "val/ppl", "val/gen_ppl")
+# val/ppl is comparable across k (standard SUBS NLL on absorbed positions), so it
+# is the primary low-noise separator. sample_entropy guards against a gen_ppl
+# "win" that is really mode collapse.
+BASE_METRICS = ("val/nll", "val/ppl", "val/sample_entropy", "val/gen_ppl")
+# Metrics used for the significance verdict (lower is better for both).
+PRIMARY_METRICS = ("val/ppl", "val/gen_ppl")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -41,6 +48,13 @@ def _parse_args() -> argparse.Namespace:
         nargs="+",
         default=[1, 2, 4],
         help="Erlang shapes to compare (default: 1 2 4).",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Seeds to aggregate over. Default: auto-detect every seed found.",
     )
     parser.add_argument(
         "--budgets",
@@ -246,34 +260,211 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+# --------------------------------------------------------------------------- #
+# Seed-aware collection and aggregation.                                       #
+# --------------------------------------------------------------------------- #
+
+def _run_regex(data: str) -> re.Pattern[str]:
+    """Matches erlang-k<k>-<data> and erlang-k<k>-<data>-s<seed> (legacy: no seed)."""
+    return re.compile(rf"^erlang-k(\d+)-{re.escape(data)}(?:-s(\d+))?$")
+
+
+def _collect_seed_runs(
+    runs: Iterable[Any],
+    ks: Sequence[int],
+    data: str,
+    seeds: Sequence[int] | None,
+    include_unfinished: bool,
+) -> tuple[dict[tuple[int, int | None], Any], list[dict[str, Any]]]:
+    """Newest run per (k, seed), plus a roster of every (k, seed) and its state.
+
+    A (k, seed) with runs but none finished is kept as None unless
+    include_unfinished, and always reported in the roster, so a crashed or
+    still-syncing run shows its state instead of silently blanking."""
+    pattern = _run_regex(data)
+    wanted_ks = set(ks)
+    wanted_seeds = set(seeds) if seeds is not None else None
+    buckets: dict[tuple[int, int | None], list[Any]] = {}
+    for run in runs:
+        match = pattern.match(run.name or "")
+        if not match:
+            continue
+        k = int(match.group(1))
+        if k not in wanted_ks:
+            continue
+        seed = int(match.group(2)) if match.group(2) is not None else None
+        if wanted_seeds is not None and seed not in wanted_seeds:
+            continue
+        buckets.setdefault((k, seed), []).append(run)
+
+    selected: dict[tuple[int, int | None], Any] = {}
+    roster: list[dict[str, Any]] = []
+    for (k, seed), candidates in sorted(
+        buckets.items(), key=lambda item: (item[0][0], item[0][1] is None, item[0][1])
+    ):
+        candidates.sort(key=lambda run: run.created_at or "", reverse=True)
+        finished = [run for run in candidates if run.state == "finished"]
+        chosen = finished[0] if finished else (
+            candidates[0] if include_unfinished else None)
+        selected[(k, seed)] = chosen
+        roster.append(
+            {
+                "k": k,
+                "seed": seed,
+                "state": candidates[0].state,
+                "used": chosen is not None,
+                "url": candidates[0].url,
+            }
+        )
+    return selected, roster
+
+
+def _aggregate_by_k(
+    selected: Mapping[tuple[int, int | None], Any], metrics: Sequence[str]
+) -> dict[int, dict[str, Any]]:
+    """Per k: mean/std/n over seeds for every metric (finite values only)."""
+    by_k: dict[int, list[dict[str, Any]]] = {}
+    for (k, _seed), run in selected.items():
+        if run is None:
+            continue
+        summary = _summary_dict(run)
+        by_k.setdefault(k, []).append(
+            {metric: _finite_number(summary.get(metric)) for metric in metrics}
+        )
+    aggregated: dict[int, dict[str, Any]] = {}
+    for k, seed_rows in by_k.items():
+        stats: dict[str, Any] = {"n_seeds": len(seed_rows)}
+        for metric in metrics:
+            values = [row[metric] for row in seed_rows if row[metric] is not None]
+            if values:
+                stats[metric] = {
+                    "mean": statistics.fmean(values),
+                    "std": statistics.stdev(values) if len(values) > 1 else 0.0,
+                    "n": len(values),
+                }
+            else:
+                stats[metric] = None
+        aggregated[k] = stats
+    return aggregated
+
+
+def _verdict(aggregated: Mapping[int, dict[str, Any]], metric: str) -> str:
+    """Is any k better than k=1 on `metric` by more than ~2 standard errors?"""
+    if 1 not in aggregated or aggregated[1].get(metric) is None:
+        return f"{metric}: no k=1 baseline; cannot assess."
+    base = aggregated[1][metric]
+    others = [
+        (k, aggregated[k][metric])
+        for k in sorted(aggregated)
+        if k != 1 and aggregated[k].get(metric) is not None
+    ]
+    if not others:
+        return f"{metric}: no k>1 runs to compare."
+    if base["n"] < 2 or any(stat["n"] < 2 for _, stat in others):
+        return (f"{metric}: need >=2 seeds per k for a noise estimate "
+                f"(have k=1:{base['n']}). Inconclusive.")
+    best_k, best = min(others, key=lambda item: item[1]["mean"])
+    delta = best["mean"] - base["mean"]  # negative = better
+    se = math.sqrt(base["std"] ** 2 / base["n"] + best["std"] ** 2 / best["n"])
+    rel = 100.0 * delta / base["mean"] if base["mean"] else float("nan")
+    if se == 0:
+        return f"{metric}: zero variance; k={best_k} delta {rel:+.2f}% (suspicious)."
+    z = delta / se
+    if delta < 0 and abs(z) >= 2.0:
+        return (f"{metric}: POSITIVE. k={best_k} beats k=1 by {rel:+.2f}% "
+                f"({abs(z):.1f} sigma, > 2). Real at this budget.")
+    if delta > 0 and abs(z) >= 2.0:
+        return (f"{metric}: NEGATIVE. best k={best_k} is still {rel:+.2f}% worse "
+                f"than k=1 ({abs(z):.1f} sigma). Erlang hurts here.")
+    return (f"{metric}: NULL. best k={best_k} is {rel:+.2f}% ({abs(z):.1f} sigma "
+            f"< 2), within seed noise. No separation.")
+
+
+def _fmt_stat(stat: Any, *, big_ok: bool = True) -> str:
+    if stat is None:
+        return "--"
+    mean, std, n = stat["mean"], stat["std"], stat["n"]
+    fmt = "{:.1f}" if (big_ok and abs(mean) >= 1000) else "{:.4f}"
+    if n > 1:
+        return f"{fmt.format(mean)}±{fmt.format(std)}"
+    return fmt.format(mean)
+
+
+def _print_seed_roster(roster: Sequence[Mapping[str, Any]]) -> None:
+    print("Runs found (k, seed, state):")
+    for entry in roster:
+        seed = "legacy" if entry["seed"] is None else f"s{entry['seed']}"
+        used = "" if entry["used"] else "  [SKIPPED: not finished]"
+        print(f"  k={entry['k']} {seed}: {entry['state']}{used}  {entry['url']}")
+    print()
+
+
 def main() -> int:
     args = _parse_args()
-    expected_names = _run_names(args.ks, args.data)
     api = wandb.Api()
     path = _project_path(api, args.project, args.entity)
     runs = api.runs(
         path,
-        filters={"display_name": {"$in": list(expected_names.values())}},
+        filters={"display_name": {"$regex": rf"^erlang-k\d+-{re.escape(args.data)}"}},
         order="-created_at",
     )
-    selected, unfinished_fallbacks = _select_runs(
-        runs, expected_names, args.include_unfinished
+    selected, roster = _collect_seed_runs(
+        runs, args.ks, args.data, args.seeds, args.include_unfinished
     )
+    metrics = _metric_names(args.budgets)
 
-    missing = [k for k in args.ks if k not in selected]
-    if missing:
-        names = ", ".join(expected_names[k] for k in missing)
-        suffix = " Pass --include-unfinished to allow incomplete runs."
-        raise SystemExit(f"No finished W&B run found for: {names}.{suffix}")
-    if unfinished_fallbacks:
-        joined = ", ".join(str(k) for k in unfinished_fallbacks)
-        print(f"Warning: using unfinished run(s) for k={joined}.\n")
-
-    rows = _comparison_rows(selected, args.budgets)
     print(f"Erlang ablation: {path} ({args.data})\n")
-    _print_comparison(rows, args.budgets)
+    if not roster:
+        raise SystemExit(
+            f"No runs matching erlang-k*-{args.data}[-s*] in {path}. "
+            "Check --data / --entity / --project."
+        )
+    _print_seed_roster(roster)
+
+    aggregated = _aggregate_by_k(selected, metrics)
+    if not aggregated:
+        raise SystemExit(
+            "No finished runs to aggregate. Pass --include-unfinished to use the "
+            "latest running/failed run per (k, seed)."
+        )
+
+    headers = ["k", "seeds", "val/nll", "val/ppl", "entropy", "gen/default",
+               *(f"gen/{b}" for b in args.budgets)]
+    table = []
+    for k in sorted(aggregated):
+        stats = aggregated[k]
+        table.append([
+            str(k),
+            str(stats["n_seeds"]),
+            _fmt_stat(stats["val/nll"]),
+            _fmt_stat(stats["val/ppl"]),
+            _fmt_stat(stats["val/sample_entropy"]),
+            _fmt_stat(stats["val/gen_ppl"]),
+            *(_fmt_stat(stats[f"val/gen_ppl@{b}step"]) for b in args.budgets),
+        ])
+    _print_table(headers, table)
+
+    print("\nVerdict (2-sigma over seeds; val/ppl is the comparable separator):")
+    for metric in PRIMARY_METRICS:
+        print(f"  {_verdict(aggregated, metric)}")
+
+    print("\nRuns:")
+    for entry in roster:
+        if entry["used"]:
+            seed = "legacy" if entry["seed"] is None else f"s{entry['seed']}"
+            print(f"  k={entry['k']} {seed}: {entry['url']}")
+
     if args.csv:
-        _write_csv(args.csv, rows)
+        csv_rows = []
+        for k in sorted(aggregated):
+            stats = aggregated[k]
+            record: dict[str, Any] = {"k": k, "n_seeds": stats["n_seeds"]}
+            for metric in metrics:
+                stat = stats[metric]
+                record[f"{metric}/mean"] = stat["mean"] if stat else None
+                record[f"{metric}/std"] = stat["std"] if stat else None
+            csv_rows.append(record)
+        _write_csv(args.csv, csv_rows)
         print(f"\nWrote {args.csv}")
     return 0
 

@@ -24,6 +24,7 @@ set -euo pipefail
 export HYDRA_FULL_ERROR=1
 
 KS=${KS:-"1 2 4"}
+SEEDS=${SEEDS:-"0"}
 STEPS=${STEPS:-100000}
 BATCH_SIZE=${BATCH_SIZE:-8}
 MODEL=${MODEL:-small}
@@ -38,7 +39,7 @@ WANDB_OFFLINE=${WANDB_OFFLINE:-True}
 export DUO_DATA_DIR=${DUO_DATA_DIR:-$PWD/data}
 mkdir -p "$DUO_DATA_DIR" watch_folder
 
-echo "[erlang] ablation over k in: $KS"
+echo "[erlang] ablation over k in: $KS   seeds: $SEEDS"
 echo "[erlang] data=$DATA steps=$STEPS batch=$BATCH_SIZE model=$MODEL length=$LENGTH"
 echo "[erlang] data cache: $DUO_DATA_DIR  wandb offline: $WANDB_OFFLINE"
 
@@ -97,25 +98,29 @@ if [[ "${SKIP_PREFLIGHT:-0}" != "1" ]]; then
 fi
 
 for k in $KS; do
-  echo "======================================================================"
-  echo "[erlang] === training k=$k ($([ "$k" = 1 ] && echo 'time-conditioned MDLM baseline' || echo 'Erlang phases')) ==="
-  echo "======================================================================"
-  python -u -m main \
-    algo=erlang \
-    algo.erlang_k="$k" \
-    model="$MODEL" \
-    model.length="$LENGTH" \
-    data="$DATA" \
-    loader.batch_size="$BATCH_SIZE" \
-    loader.eval_batch_size="$BATCH_SIZE" \
-    sampling.predictor=ancestral_cache \
-    eval.compute_generative_perplexity=True \
-    eval.gen_ppl_step_budgets="[1,2,4,8,16]" \
-    trainer.max_steps="$STEPS" \
-    wandb.name="erlang-k${k}-${DATA}" \
-    +wandb.offline="$WANDB_OFFLINE" \
-    "$@"
+  for s in $SEEDS; do
+    echo "======================================================================"
+    echo "[erlang] === training k=$k seed=$s ($([ "$k" = 1 ] && echo 'time-conditioned MDLM baseline' || echo 'Erlang phases')) ==="
+    echo "======================================================================"
+    python -u -m main \
+      algo=erlang \
+      algo.erlang_k="$k" \
+      seed="$s" \
+      model="$MODEL" \
+      model.length="$LENGTH" \
+      data="$DATA" \
+      loader.batch_size="$BATCH_SIZE" \
+      loader.eval_batch_size="$BATCH_SIZE" \
+      sampling.predictor=ancestral_cache \
+      eval.compute_generative_perplexity=True \
+      eval.gen_ppl_step_budgets="[1,2,4,8,16]" \
+      trainer.max_steps="$STEPS" \
+      wandb.name="erlang-k${k}-${DATA}-s${s}" \
+      +wandb.offline="$WANDB_OFFLINE" \
+      "$@"
+  done
 done
 
-echo "[erlang] ablation complete. Compare val/gen_ppl (and val/gen_ppl@{k}step)"
-echo "[erlang] across runs: k=1 is the time-conditioned MDLM baseline, k>1 adds Erlang phases."
+echo "[erlang] ablation complete. Aggregate with:"
+echo "[erlang]   python scripts/compare_erlang_ablation.py --data $DATA --ks $KS --seeds $SEEDS"
+echo "[erlang] Primary separator is val/ppl (comparable NLL across k); k=1 is the baseline."
